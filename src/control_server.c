@@ -863,7 +863,7 @@ void *run_control_server(void *arg) {
         int cli_fd = accept(srv_fd, NULL, NULL);
         
         /* If connection invalid don't process anything*/
-        if (cli_fd < 0) continue;
+        if (cli_fd < 0) sched_yield();
         
         /* process received data */
         //printf("[CTRL] Client connected\n");

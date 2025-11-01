@@ -20,12 +20,7 @@
             "vf_devids" : [
                 "0000:01:00.2",
                 "0000:01:00.3"
-            ],
-            "vlan_append" : false,
-            "vlan_ids"    : [
-                100
-            ],
-            "default_speed" : 10000
+            ]
         }
     ],
     "dpdk_config" :

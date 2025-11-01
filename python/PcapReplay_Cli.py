@@ -81,7 +81,7 @@ class PcapReplayCli():
 
         while True:
             try:
-                cmd = self.session.prompt("PacketSmith> ",completer=self.cli_completer,style=self.style,)
+                cmd = self.session.prompt("PcapReplay> ",completer=self.cli_completer,style=self.style,)
                 if not self.handle_command(cmd):
                     break
             except (KeyboardInterrupt, EOFError):
