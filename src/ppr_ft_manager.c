@@ -36,9 +36,9 @@ loop.
 #include <rte_common.h>
 #include <rte_rcu_qsbr.h>
 
-#include "ft_manager.h"
-#include "flowtable.h"
-#include "app_defines.h"
+#include "ppr_ft_manager.h"
+#include "ppr_flowtable.h"
+#include "ppr_app_defines.h"
 
 /* Function to process a flow table command. The function checks the ft controller 
 structure to determine if a command has been subitted. It then takes ownership of the controller lock 
@@ -56,27 +56,6 @@ static int process_ft_command(struct pthread_args *thread_args){
             //get the lock 
             pthread_mutex_lock(&ctl->lock);
             ctl->busy = true;
-
-            //process the commman
-            if (ctl->command == FT_CMD_ADD_ENTRY){
-                rc = ft_add(thread_args->global_flowtable, ctl->key, ctl->new_action);
-            }
-            else if (ctl->command == FT_CMD_MOD_ENTRY){
-                printf("mod entry\n");
-                rc = ft_replace(thread_args->global_flowtable,ctl->key,ctl->new_action,ctl->opt_old_action);
-            }
-            else if (ctl->command == FT_CMD_DEL_ENTRY){
-                printf("delete entry\n");
-                rc = ft_del(thread_args->global_flowtable, ctl->key);
-            }
-            else if (ctl->command == FT_CMD_APP_ENTRY){
-                printf("append entry\n");
-                rc = ft_append(thread_args->global_flowtable,ctl->key,ctl->new_action);
-            }
-            else {
-                printf("invalid op\n");
-                rc = -1;
-            }
 
             //clear the command
             ctl->command = FT_CMD_NONE;
@@ -97,7 +76,7 @@ void *run_ft_manager_thread(void *arg) {
     //setup some accessor variables for global structs
     struct pthread_args *thread_args  = (struct pthread_args *)arg;
     struct ft_manager_ctl * ctl = thread_args->ft_controller;
-    struct flow_table *ft = thread_args->global_flowtable;
+    ppr_flow_table_t *ft = thread_args->global_flowtable;
 
     //setup poll rate variables
     const uint64_t hz = rte_get_timer_hz();

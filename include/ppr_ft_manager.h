@@ -14,7 +14,7 @@ Description: header file for flowtable manager thread functions
 #include <stdatomic.h>
 #include <stdbool.h>
 
-#include "flowtable.h"
+#include "ppr_flowtable.h"
 
 /* Enum for supported commands to ft_manager */
 typedef enum {

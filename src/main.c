@@ -44,14 +44,16 @@ At the end the master thread sits idle as all other spawned threads performed th
 #include <limits.h>
 #include <arpa/inet.h>  // inet_pton, ntohl, htonl
 
-#include "control.h"
-#include "app_defines.h"
-#include "ports.h"
-#include "stats.h"
-#include "tx_worker.h"
-#include "buff_worker.h"
-#include "mbuf_fields.h"
-#include "flowtable.h"
+#include "ppr_control.h"
+#include "ppr_app_defines.h"
+#include "ppr_ports.h"
+#include "ppr_stats.h"
+#include "ppr_tx_worker.h"
+#include "ppr_buff_worker.h"
+#include "ppr_mbuf_fields.h"
+#include "ppr_flowtable.h"
+#include "ppr_pcap_loader.h"
+#include "ppr_ft_manager.h"
 
 
 
@@ -201,27 +203,6 @@ int main(int argc, char **argv) {
 
     /* -------------------------- Initialize global flowtable -------------------------------------------------------------- */
     //create a default action for the flow table
-    struct ft_action default_action;
-    default_action.kind = FT_ACT_NOP;
-    default_action.default_rule = true;
-
-    //populate the flowtable_config 
-    struct ft_cfg flowtable_cfg;
-    flowtable_cfg.default_action = &default_action;
-    flowtable_cfg.name = "Global_Flowtable";
-    flowtable_cfg.num_reader_threads = buff_cores;
-    flowtable_cfg.qsbr_max_reclaim_size = 2048;
-    flowtable_cfg.qsbr_reclaim_limit = 4096; 
-    flowtable_cfg.shards = 1;
-    flowtable_cfg.socket_id = rte_socket_id();
-    flowtable_cfg.hash_algo = FT_HASH_CRC32;
-    flowtable_cfg.entries = 1048576;
-
-    //create the flowtable
-    struct flow_table *global_ft = ft_create(&flowtable_cfg);
-    if (global_ft == NULL){
-        rte_exit(EXIT_FAILURE, "Failed to create flowtable\n");
-    }
 
     /* -------------------------- Initialize all shared memory structures for pthreads & DPDK workers ---------------------- */
 
@@ -325,7 +306,7 @@ int main(int argc, char **argv) {
     stats_args = calloc(1,sizeof(struct pthread_args));
     stats_args->global_stats = shared_app_stats;
     stats_args->global_state = shared_app_state;
-    stats_args->global_flowtable = global_ft; 
+    //stats_args->global_flowtable = global_ft; 
     stats_args->pcap_controller = pcap_controller;
     stats_args->ft_controller = ft_controller;
     stats_args->private_args = (void *)&stats_poll_rate_ms; 
@@ -333,7 +314,7 @@ int main(int argc, char **argv) {
     control_args = calloc(1,sizeof(struct pthread_args));
     control_args->global_stats = shared_app_stats;
     control_args->global_state = shared_app_state;
-    control_args->global_flowtable = global_ft;
+    //control_args->global_flowtable = global_ft;
     control_args->pcap_controller = pcap_controller;
     control_args->ft_controller = ft_controller;
     control_args->private_args = (void *)&ctl_port;
@@ -341,14 +322,14 @@ int main(int argc, char **argv) {
     pcap_loader_args = calloc(1,sizeof(struct pthread_args));
     pcap_loader_args->global_stats = shared_app_stats;
     pcap_loader_args->global_state = shared_app_state;
-    pcap_loader_args->global_flowtable = global_ft;
+    //pcap_loader_args->global_flowtable = global_ft;
     pcap_loader_args->pcap_controller = pcap_controller;    
     pcap_loader_args->ft_controller = ft_controller;
 
     ft_manager_args = calloc(1,sizeof(struct pthread_args));
     ft_manager_args->global_stats = shared_app_stats;
     ft_manager_args->global_state = shared_app_state;
-    ft_manager_args->global_flowtable = global_ft;
+    //ft_manager_args->global_flowtable = global_ft;
     ft_manager_args->pcap_controller = pcap_controller;   
     ft_manager_args->ft_controller = ft_controller; 
     
@@ -390,7 +371,7 @@ int main(int argc, char **argv) {
         tx_args_array[i].num_ports = nb_ports;
         tx_args_array[i].tx_thread_index = i;
         tx_args_array[i].core_map = core_map;
-        tx_args_array[i].global_flowtable = global_ft;
+        //tx_args_array[i].global_flowtable = global_ft;
 
         //give tx core a pointer to all of its rx rings 
         tx_args_array[i].buffer_rings = (struct rte_ring ***)calloc(nb_ports,sizeof(struct rte_ring **));
@@ -412,7 +393,7 @@ int main(int argc, char **argv) {
             buff_args_array[buf_ctr].clone_mpool            = core_clone_mempools[i];
             buff_args_array[buf_ctr].linked_tx_core         = i;
             buff_args_array[buf_ctr].num_ports              = nb_ports;
-            buff_args_array[buf_ctr].global_flowtable       = global_ft;
+            //buff_args_array[buf_ctr].global_flowtable       = global_ft;
 
             //setup parameters for dynamic expansion mode 
             buff_args_array[buf_ctr].virt_ip_cnt            = 65536;

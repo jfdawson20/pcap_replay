@@ -39,11 +39,12 @@ and adding them to the shared double buffer structures that link buffer to tx th
 #include <rte_byteorder.h>
 
 /* Local Project Includes */
-#include "buff_worker.h"
-#include "app_defines.h"
-#include "pcap_loader.h"
-#include "mbuf_fields.h"
-#include "flowtable.h"
+#include "ppr_buff_worker.h"
+#include "ppr_app_defines.h"
+#include "ppr_pcap_loader.h"
+#include "ppr_mbuf_fields.h"
+#include "ppr_flowtable.h"
+#include "ppr_control.h"
 
 #define AUTO_FLUSH_CYCLES 10000
 
@@ -184,227 +185,7 @@ static __rte_always_inline int
 modify_mbufclone_hdrs(struct flow_table *ft, struct rte_mbuf *c,
                       uint32_t core_id, uint32_t vert_id)
 {
-    uint32_t pkt_len = rte_pktmbuf_pkt_len(c);
-    if (pkt_len < sizeof(struct rte_ether_hdr))
-        return -1;
-
-    struct rte_ether_hdr *eth = rte_pktmbuf_mtod(c, struct rte_ether_hdr *);
-    uint16_t l2_len = sizeof(*eth);
-    uint16_t etype = rte_be_to_cpu_16(eth->ether_type);
-    uint32_t off = sizeof(struct rte_ether_hdr);
-
-    /* Single 802.1Q (extend as needed for QinQ) */
-    if (etype == RTE_ETHER_TYPE_VLAN) {
-        if (pkt_len < off + sizeof(struct rte_vlan_hdr)) return -1;
-        struct rte_vlan_hdr *vh = (struct rte_vlan_hdr *)((uint8_t *)eth + off);
-        etype = rte_be_to_cpu_16(vh->eth_proto);
-        off += sizeof(struct rte_vlan_hdr);
-        l2_len += sizeof(struct rte_vlan_hdr);
-    }
-
-    /* Build unified flow key (IPv4 or IPv6) */
-    struct flow5 key;
-    uint8_t *base = (uint8_t *)eth;
-    const uint8_t *pkt_end = base + pkt_len;
-
-    uint8_t l4_proto = 0;
-    const uint8_t *l4_ptr = NULL;
-
-    if (etype == RTE_ETHER_TYPE_IPV4) {
-        if (pkt_len < off + sizeof(struct rte_ipv4_hdr)) return -1;
-        struct rte_ipv4_hdr *ip4 = (struct rte_ipv4_hdr *)((uint8_t *)eth + off);
-        if ((ip4->version_ihl >> 4) != 4) return -1;
-
-        /* Drop non-first fragments */
-        if ((ip4->fragment_offset & rte_cpu_to_be_16(RTE_IPV4_HDR_OFFSET_MASK)) != 0)
-            return -1;
-
-        uint16_t ihl_bytes = (ip4->version_ihl & 0x0F) * 4;
-        if (pkt_len < off + ihl_bytes) return -1;
-
-        l4_proto = ip4->next_proto_id;
-        l4_ptr = (const uint8_t *)ip4 + ihl_bytes;
-
-        /* Extract ports if TCP/UDP; fields are BE16 on the wire */
-        uint16_t sport_be = 0, dport_be = 0;
-        if (l4_proto == IPPROTO_TCP) {
-            if (l4_ptr + sizeof(struct rte_tcp_hdr) > pkt_end) return -1;
-            const struct rte_tcp_hdr *tcp = (const struct rte_tcp_hdr *)l4_ptr;
-            sport_be = tcp->src_port; dport_be = tcp->dst_port;
-        } else if (l4_proto == IPPROTO_UDP) {
-            if (l4_ptr + sizeof(struct rte_udp_hdr) > pkt_end) return -1;
-            const struct rte_udp_hdr *udp = (const struct rte_udp_hdr *)l4_ptr;
-            sport_be = udp->src_port; dport_be = udp->dst_port;
-        } else {
-            // If you don’t want to handle others, bail
-            // printf("Unsupported L4 proto %u\n", l4_proto);
-            return -1;
-        }
-
-        /* Build IPv4 key (expects BE) */
-        ft_key_from_ipv4(&key, ip4->src_addr, ip4->dst_addr, sport_be, dport_be, l4_proto);
-        /*
-        printf("srcip: 0x");
-        for (int i =0;i<16;i++){
-            printf("%x",key.src[i]);
-        }
-        printf("\ndstip: 0x");
-        for (int i =0;i<16;i++){
-            printf("%x",key.dst[i]);
-        }   
-        printf("\nsrcpt: 0x%lx\n", key.src_port);
-        printf("dstpt: 0x%lx\n", key.dst_port);
-        printf("proto: 0x%lx\n", key.proto);
-        */
-
-        /* Lookup action */
-        const struct ft_action *act = ft_lookup(ft, &key);
-
-        switch (act->kind) {
-        case FT_ACT_NOP:
-            break;
-        case FT_ACT_DROP:
-            return -2;
-
-        case FT_ACT_REWRITE_L2:
-        case FT_ACT_REWRITE_L2L3:
-        case FT_ACT_REWRITE_L2L3L4:
-            if (act->src_mac_valid) eth->src_addr = act->new_src_mac;
-            if (act->dst_mac_valid) eth->dst_addr = act->new_dst_mac;
-            /* fallthrough for L3/L4 parts */
-            if (act->kind == FT_ACT_REWRITE_L2) break;
-            /* no break */
-
-        case FT_ACT_REWRITE_L3:
-        case FT_ACT_REWRITE_L3L4:
-            /* IPv4-only L3 rewrite (your struct is v4-centric) */
-            if (act->src_ip_valid) {
-                ip4->src_addr = htonl(ntohl(act->new_src_ip_subnet) + (core_id << 16) + vert_id);
-            }
-            if (act->dst_ip_valid) {
-                ip4->dst_addr = htonl(ntohl(act->new_dst_ip_subnet) + (core_id << 16) + vert_id);
-            }
-            if (act->kind == FT_ACT_REWRITE_L3) break;
-            /* fallthrough to L4 */
-
-        case FT_ACT_REWRITE_L4: {
-            if (l4_proto == IPPROTO_TCP) {
-                struct rte_tcp_hdr *tcp = (struct rte_tcp_hdr *)l4_ptr;
-                if (act->sport_valid) tcp->src_port = act->new_sport;
-                if (act->dport_valid) tcp->dst_port = act->new_dport;
-            } else if (l4_proto == IPPROTO_UDP) {
-                struct rte_udp_hdr *udp = (struct rte_udp_hdr *)l4_ptr;
-                if (act->sport_valid) udp->src_port = act->new_sport;
-                if (act->dport_valid) udp->dst_port = act->new_dport;
-            }
-            break;
-        }
-        default:
-            break;
-        }
-
-        /* Offloads for IPv4 */
-        ip4->hdr_checksum = 0;
-        c->l2_len = l2_len;
-        c->l3_len = ihl_bytes;
-        c->ol_flags |= RTE_MBUF_F_TX_IPV4 | RTE_MBUF_F_TX_IP_CKSUM;
-
-        if (l4_proto == IPPROTO_TCP) {
-            struct rte_tcp_hdr *tcp = (struct rte_tcp_hdr *)l4_ptr;
-            tcp->cksum = 0;
-            c->ol_flags |= RTE_MBUF_F_TX_TCP_CKSUM;
-        } else if (l4_proto == IPPROTO_UDP) {
-            struct rte_udp_hdr *udp = (struct rte_udp_hdr *)l4_ptr;
-            udp->dgram_cksum = 0;
-            c->ol_flags |= RTE_MBUF_F_TX_UDP_CKSUM;
-        }
-        return 0;
-    }
-    else if (etype == RTE_ETHER_TYPE_IPV6) {
-        if (pkt_len < off + sizeof(struct rte_ipv6_hdr)) return -1;
-        struct rte_ipv6_hdr *ip6 = (struct rte_ipv6_hdr *)((uint8_t *)eth + off);
-
-        /* Find L4 start (walk extension headers) */
-        if (ipv6_find_l4(ip6, pkt_end, &l4_proto, &l4_ptr) != 0)
-            return -1;
-
-        /* Extract ports if TCP/UDP */
-        uint16_t sport_be = 0, dport_be = 0;
-        if (l4_proto == IPPROTO_TCP) {
-            if (l4_ptr + sizeof(struct rte_tcp_hdr) > pkt_end) return -1;
-            const struct rte_tcp_hdr *tcp = (const struct rte_tcp_hdr *)l4_ptr;
-            sport_be = tcp->src_port; dport_be = tcp->dst_port;
-        } else if (l4_proto == IPPROTO_UDP) {
-            if (l4_ptr + sizeof(struct rte_udp_hdr) > pkt_end) return -1;
-            const struct rte_udp_hdr *udp = (const struct rte_udp_hdr *)l4_ptr;
-            sport_be = udp->src_port; dport_be = udp->dst_port;
-        } else {
-            // printf("Unsupported v6 L4 proto %u\n", l4_proto);
-            return -1;
-        }
-
-        /* Build IPv6 key (ports are BE16) */
-        ft_key_from_ipv6(&key, &ip6->src_addr, &ip6->dst_addr, sport_be, dport_be, l4_proto);
-
-        /* Lookup action */
-        const struct ft_action *act = ft_lookup(ft, &key);
-        switch (act->kind) {
-        case FT_ACT_NOP:
-            break;
-        case FT_ACT_DROP:
-            return -2;
-
-        case FT_ACT_REWRITE_L2:
-        case FT_ACT_REWRITE_L2L3:
-        case FT_ACT_REWRITE_L2L3L4:
-            if (act->src_mac_valid) eth->src_addr = act->new_src_mac;
-            if (act->dst_mac_valid) eth->dst_addr = act->new_dst_mac;
-            if (act->kind == FT_ACT_REWRITE_L2) break;
-            /* FALLTHROUGH: L3 for IPv6 not implemented with current ft_action fields */
-            /* If you add IPv6 fields to ft_action, do the ip6 src/dst rewrite here. */
-            if (act->kind == FT_ACT_REWRITE_L2L3) break;
-            /* fallthrough to L4 */
-
-        case FT_ACT_REWRITE_L3:
-        case FT_ACT_REWRITE_L3L4:
-        case FT_ACT_REWRITE_L4: {
-            if (l4_proto == IPPROTO_TCP) {
-                struct rte_tcp_hdr *tcp = (struct rte_tcp_hdr *)l4_ptr;
-                if (act->sport_valid) tcp->src_port = act->new_sport;
-                if (act->dport_valid) tcp->dst_port = act->new_dport;
-            } else if (l4_proto == IPPROTO_UDP) {
-                struct rte_udp_hdr *udp = (struct rte_udp_hdr *)l4_ptr;
-                if (act->sport_valid) udp->src_port = act->new_sport;
-                if (act->dport_valid) udp->dst_port = act->new_dport;
-            }
-            break;
-        }
-        default:
-            break;
-        }
-
-        /* Offloads for IPv6:
-         * - No L3 checksum; set IPv6 flag and l3_len = sizeof(ipv6)
-         * - L4 pseudo-header checksum is computed by HW with TCP/UDP flags
-         */
-        c->l2_len = l2_len;
-        c->l3_len = sizeof(struct rte_ipv6_hdr);
-        c->ol_flags |= RTE_MBUF_F_TX_IPV6;
-
-        if (l4_proto == IPPROTO_TCP) {
-            struct rte_tcp_hdr *tcp = (struct rte_tcp_hdr *)l4_ptr;
-            tcp->cksum = 0;
-            c->ol_flags |= RTE_MBUF_F_TX_TCP_CKSUM;
-        } else if (l4_proto == IPPROTO_UDP) {
-            struct rte_udp_hdr *udp = (struct rte_udp_hdr *)l4_ptr;
-            udp->dgram_cksum = 0;
-            c->ol_flags |= RTE_MBUF_F_TX_UDP_CKSUM;
-        }
-        return 0;
-    }
-
-    /* Non-IP */
-    return -1;
+    return 0;
 }
 
 
@@ -560,7 +341,7 @@ int buffer_worker(__rte_unused void *arg) {
     }
 
     //initialize flowtable reader 
-    ft_reader_init(buff_args->global_flowtable, buff_args->buff_thread_index);
+    //ppr_ft_reader_init(buff_args->global_flowtable, buff_args->buff_thread_index);
     
     /* Main Thread Loop - Run till killed */
     for(;;){
@@ -668,7 +449,7 @@ int buffer_worker(__rte_unused void *arg) {
         }
         
         //mark thread as idle for flowtable background tasks 
-        ft_reader_idle(buff_args->global_flowtable, buff_args->buff_thread_index);
+        //ppr_ft_reader_idle(buff_args->global_flowtable, buff_args->buff_thread_index);
     }
     
     return 0;

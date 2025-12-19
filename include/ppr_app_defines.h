@@ -10,13 +10,8 @@ Description: header file containing app wide constants and structs
 #ifndef APP_DEFINE_H
 #define APP_DEFINE_H
 #include <rte_log.h>
-#include <stats.h> 
-#include <control.h> 
 #include <rte_mempool.h>
 
-#include "pcap_loader.h"
-#include "flowtable.h"
-#include "ft_manager.h"
 
 #define RX_RING_SIZE 1024
 #define TX_RING_SIZE 1024
@@ -33,6 +28,14 @@ Description: header file containing app wide constants and structs
 //interconnect ring properties
 #define RING_BURST 128
 #define RXTX_RING_SIZE (1u << 14) 
+
+
+/* Forward declarations for types only used via pointer in this header */
+typedef struct ppr_global_policy_epoch  ppr_global_policy_epoch_t;   
+typedef struct ppr_acl_rule_db          ppr_acl_rule_db_t;
+typedef struct ppr_acl_runtime          ppr_acl_runtime_t;
+typedef struct ppr_rcu_ctx              ppr_rcu_ctx_t;
+
 
 //struct for passing shared memory and arguments to pthreads (for control and stats threads)
 struct pthread_args {

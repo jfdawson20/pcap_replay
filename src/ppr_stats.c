@@ -17,8 +17,9 @@ The main thread runs in a infinite loop at a poll frequency specified at launch 
 #include <stdio.h> 
 #include <unistd.h>
 
-#include "stats.h"
-#include "app_defines.h"
+#include "ppr_stats.h"
+#include "ppr_app_defines.h"
+#include "ppr_control.h"
 
 /* function for calculating time differences of timespec structs*/
 double timespec_diff_sec(struct timespec *a, struct timespec *b) {

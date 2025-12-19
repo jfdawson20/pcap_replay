@@ -21,8 +21,8 @@ Description: contains the code required to initialize ports for uses in a DPDK a
 #include <rte_ether.h>
 #include <rte_common.h>
 
-#include "app_defines.h"
-#include "ports.h"
+#include "ppr_app_defines.h"
+#include "ppr_ports.h"
 
 /* Port configuration function, takes a port number, mem pool, and number of tx cores and configures the port accordingly */
 int ps_port_init(uint16_t port, struct rte_mempool *mbuf_pool, unsigned int core_count )

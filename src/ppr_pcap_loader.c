@@ -25,9 +25,10 @@ for transmission.
 #include <stdbool.h>
 #include <stdatomic.h>
 
-#include "pcap_loader.h"
-#include "app_defines.h"
-#include "mbuf_fields.h"
+#include "ppr_pcap_loader.h"
+#include "ppr_app_defines.h"
+#include "ppr_mbuf_fields.h"
+#include "ppr_control.h"
 
 
 /* ------------------------------- dynamic mbuff array functions --------------------------*/

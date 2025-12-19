@@ -38,12 +38,12 @@ double buffer arrays for valid data to transmit.
 #include <limits.h>
 #include <rte_ring.h>
 
-#include "control.h"
-#include "app_defines.h"
-#include "ports.h"
-#include "stats.h"
-#include "tx_worker.h"
-#include "buff_worker.h"
+#include "ppr_control.h"
+#include "ppr_app_defines.h"
+#include "ppr_ports.h"
+#include "ppr_stats.h"
+#include "ppr_tx_worker.h"
+#include "ppr_buff_worker.h"
 
 /* Main entry point for tx worker thread */
 int tx_worker(__rte_unused void *arg) {
