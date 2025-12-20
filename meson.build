@@ -13,6 +13,7 @@ dpdk = dependency('libdpdk', required: true)
 jansson = dependency('jansson', required: true)
 pthread = dependency('threads', required: true)
 pcap    = dependency('libpcap', required: true)
+cyaml   = dependency('libcyaml', required: true)
 
 # Conditional flags based on buildtype
 bt = get_option('buildtype')

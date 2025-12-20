@@ -12,6 +12,9 @@ Description: header file containing app wide constants and structs
 #include <rte_log.h>
 #include <rte_mempool.h>
 
+#include <signal.h>
+#include <stdatomic.h>   
+
 
 #define RX_RING_SIZE 1024
 #define TX_RING_SIZE 1024
@@ -32,10 +35,12 @@ Description: header file containing app wide constants and structs
 
 /* Forward declarations for types only used via pointer in this header */
 typedef struct ppr_global_policy_epoch  ppr_global_policy_epoch_t;   
+typedef struct ppr_flow_table           ppr_flow_table_t;
 typedef struct ppr_acl_rule_db          ppr_acl_rule_db_t;
 typedef struct ppr_acl_runtime          ppr_acl_runtime_t;
 typedef struct ppr_rcu_ctx              ppr_rcu_ctx_t;
-
+typedef struct ppr_ports                ppr_ports_t; 
+typedef struct ppr_stats_all            ppr_stats_all_t;
 
 //struct for passing shared memory and arguments to pthreads (for control and stats threads)
 struct pthread_args {
@@ -79,10 +84,50 @@ struct buff_worker_args {
     struct virtual_flow    **virtual_flows; //array of virt flow pointers, 1x array per port
 };
 
+
+/* per thread struct with globals */
+typedef struct {
+    //identifiers
+    unsigned int            core_id; 
+    unsigned int            thread_index;
+    unsigned int            poll_period_ms;
+    _Atomic  bool           *app_ready;      //written by main, read by threads, common
+    _Atomic  bool           thread_ready;    //written by thread, read by main, one per thread
+    bool                    yield_sched;  //indicate if the worker thread should yield the cpu when idle
+    
+    //stats & control structs
+    ppr_ports_t             *global_port_list;
+    ppr_stats_all_t         *global_stats;
+    //mempool pointers
+
+    //QSBR Context
+    ppr_rcu_ctx_t              *rcu_ctx;
+    
+    //lookup tables 
+    ppr_flow_table_t          *ip_flowtable;
+    ppr_flow_table_t          *l2_flowtable;
+    //acl rules interface 
+    ppr_acl_rule_db_t            *acl_rule_db;
+    ppr_acl_runtime_t            *acl_runtime;
+
+    //app controller settings
+    int                         controller_port;
+
+
+} ppr_thread_args_t;
+
+
 struct core_mapping {
     unsigned int tx_core; 
     unsigned int *filler_cores;
     unsigned int total_fillers;
 };
+
+
+//global app failure flag and fatal error function
+extern _Atomic int wps_fatal_error;
+extern volatile sig_atomic_t force_quit;
+
+void wps_fatal(const char *fmt, ...);
 
 #endif 

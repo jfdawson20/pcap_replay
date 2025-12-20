@@ -1,0 +1,87 @@
+app_settings:
+  log_level: 7
+  default_output: stdout
+  default_log_dir: /var/log
+  global_rx_burst_size: 32
+  global_tx_burst_size: 128
+  controller_port: 9000
+
+#wps application thread configuration
+thread_settings:
+  total_cores: 4
+  tx_cores: 1
+  base_lcore_id: 0
+  limit_buf_cores: 1
+
+multi_tenant_settings:
+  enable_multi_tenancy: false
+  method: vxlan #qinq or vxlan
+
+#NIC port configuration / mapping
+port_settings: 
+  - name: port0
+    type: datapath
+    pci_bus_addr: "0000:01:00.0"
+    rx_ring_size: 1024
+    tx_ring_size: 1024
+    tx_ip_checksum_offload: true
+    tx_tcp_checksum_offload: true
+    tx_udp_checksum_offload: true
+    tx_multiseg_offload: true
+
+  - name: port1
+    type: datapath
+    pci_bus_addr: "0000:01:00.1"
+    rx_ring_size: 1024
+    tx_ring_size: 1024
+    tx_ip_checksum_offload: true
+    tx_tcp_checksum_offload: true
+    tx_udp_checksum_offload: true
+    tx_multiseg_offload: true
+
+#mempool configuration settings for wps 
+#rx mempool used to store incoming packets
+mempool_settings: 
+  - name: network_mempool
+    mpool_entries: 131072
+    mpool_cache: 256
+
+  - name: clone_mempool
+    mpool_entries: 65536
+    mpool_cache: 256
+
+  - name: copy_mempool
+    mpool_entries: 65536
+    mpool_cache: 256
+
+#ACL table configuration settings
+acl_table_settings:
+  #startup_cfg_file: "acl_rules/example_acl_rules.yaml"
+  qsbr_reclaim_size: 2048
+  qsbr_reclaim_limit: 4096  
+
+#configure global flowtable settings 
+flowtable_settings:
+  - table_name: "ip_flowtable"
+    key_type: "ipv46"
+    max_entries: 262144
+    default_lifetime_ms: 300000     #5 minutes
+    default_idle_timeout_ms: 30000  #30 seconds
+    hash_algo: rss
+    qsbr_reclaim_size: 2048
+    qsbr_reclaim_limit: 4096
+
+  - table_name: "l2_flowtable"
+    key_type: "l2"
+    max_entries: 16384
+    default_lifetime_ms: 300000     #5 minutes
+    default_idle_timeout_ms: 30000  #30 seconds
+    hash_algo: rss
+    qsbr_reclaim_size: 2048
+    qsbr_reclaim_limit: 4096
+
+
+
+
+
+

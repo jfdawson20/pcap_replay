@@ -28,7 +28,7 @@ allowing for creation of IP and Non IP flowtables.
 #include "ppr_header_extract.h"
 #include "ppr_actions.h"
 #include "ppr_qsbr.h"
-
+#include "ppr_config.h"
 
 #define MAX_WALKS_PER_TICK 2048
 #define PPR_L1_CACHE_SIZE 64 /* per-lcore tiny cache */
@@ -48,13 +48,6 @@ static const uint8_t default_rss_key[40] = {
     0x6A, 0x42, 0xB7, 0x3B,
     0xBE, 0xAC, 0x01, 0xFA
 };
-
-
-typedef enum {
-    MULTI_TENANT_PROTOCOL_NONE = 0,
-    MULTI_TENANT_PROTOCOL_QINQ = 1,
-    MULTI_TENANT_PROTOCOL_VXLAN = 2,
-} ppr_multi_tenant_protocol_t;
 
 /* -------------------------------------------- Flow Key Structs ------------------------------------------------- */
 

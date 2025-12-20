@@ -29,6 +29,7 @@ At the end the master thread sits idle as all other spawned threads performed th
 #include <time.h>
 #include <jansson.h>
 #include <stdbool.h>
+#include <cyaml/cyaml.h>
 
 #include <rte_eal.h>
 #include <rte_version.h>
@@ -40,9 +41,11 @@ At the end the master thread sits idle as all other spawned threads performed th
 #include <rte_ethdev.h>
 #include <rte_mempool.h>
 #include <rte_mbuf_dyn.h>
+#include <rte_malloc.h>
 #include <rte_ring.h>
 #include <limits.h>
 #include <arpa/inet.h>  // inet_pton, ntohl, htonl
+#include <signal.h>
 
 #include "ppr_control.h"
 #include "ppr_app_defines.h"
@@ -51,14 +54,39 @@ At the end the master thread sits idle as all other spawned threads performed th
 #include "ppr_tx_worker.h"
 #include "ppr_buff_worker.h"
 #include "ppr_mbuf_fields.h"
-#include "ppr_flowtable.h"
 #include "ppr_pcap_loader.h"
-#include "ppr_ft_manager.h"
+#include "ppr_config.h"
+#include "ppr_acl.h"
+#include "ppr_acl_db.h"
+#include "ppr_acl_yaml.h"
 
+//global force quit 
+volatile sig_atomic_t force_quit = 0;
+static void signal_handler(int signum)
+{
+    if (signum == SIGINT || signum == SIGTERM) {
+        force_quit = 1;
+    }
+}
 
+//global error flag 
+_Atomic int ppr_fatal_error = 0;
+void ppr_fatal(const char *fmt, ...)
+{
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_CRIT, "FATAL ERROR: %s", fmt);
+    atomic_store_explicit(&ppr_fatal_error, 1, memory_order_release);
+    force_quit = 1;
+    
+}
+
+/* Declared in ppr_config.c main yaml parsing config schema */
+extern const cyaml_schema_value_t ppr_config_schema;
 
 /* Main entry point for DPDK application */
 int main(int argc, char **argv) {
+
+    int ppr_rc = 0; 
+
 
     unsigned int main_lcore_id; 
     cpu_set_t cpuset; 
@@ -68,8 +96,6 @@ int main(int argc, char **argv) {
     pthread_t ft_manager_thread; 
     unsigned int ctl_port = 9000; 
     unsigned int stats_poll_rate_ms = 500; 
-    json_t *config_root;
-    json_error_t config_error;
 
     struct rte_mempool *app_mempool = NULL;
     struct rte_mempool **core_clone_mempools = NULL; 
@@ -78,11 +104,35 @@ int main(int argc, char **argv) {
     struct psmith_stats_all *shared_app_stats;
     struct psmith_app_state *shared_app_state; 
 
-    //init the DPDK environment abstraction layer 
+    //start init, note we use PPR_LOG macro defined in ppr_log.h for all logging, this allows for different log levels and per module logging control
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\Pcap Replay Application Starting\n\n");
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+        "\n############################### Initializing DPDK EAL ###############################\n\n");
+
+    /* Install signal handlers for clean shutdown */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    if (sigaction(SIGINT, &sa, NULL) < 0) {
+        rte_exit(EXIT_FAILURE, "sigaction(SIGINT) failed\n");
+    }
+    if (sigaction(SIGTERM, &sa, NULL) < 0) {
+        rte_exit(EXIT_FAILURE, "sigaction(SIGTERM) failed\n");
+    }
+
+
+    /* -------------------------- Init DPDK EAL ----------------------------------------------------------------- */
+    //for any DPDK app, first thing we do is initialize the EAL (Environment Abstraction Layer) which sets up hugepages, memory, PMD's etc. 
     int ret = rte_eal_init(argc, argv);
     if (ret < 0) {
         rte_panic("Cannot init EAL\n");
     }
+
+    //assumption today is all systems are NUMA single socket, so we get the socket id for future use
+    int socket_id = rte_socket_id();
 
     uint64_t tsc_hz = rte_get_tsc_hz();
     
@@ -92,27 +142,37 @@ int main(int argc, char **argv) {
     argc -=ret;
     argv += ret;
 
-    /* -------------------------- Load config json file  --------------------------------------------------------- */
-
+    /* -------------------------- Load config yaml file  --------------------------------------------------------- */
+    //load application config from yaml file specified on command line, yaml parsing is done using libcymal library
+    //libcyaml config schema is defined in ppr_config.c and ppr_config.h 
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+        "\n############################### Loading Application Configuration ###############################\n\n");
+    //get config file path from eal arguments 
     const char *config_file = NULL;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
             config_file = argv[i + 1];
             i++;
         }
-    }    
-
-    printf("config file: %s\n",config_file);
-    //load config file 
-    config_root = json_load_file(config_file,0,&config_error);
-    if (!config_root){
-        rte_exit(EXIT_FAILURE,"Failed to load config json file %s: %s\n",config_file,config_error.text);
     }
 
+    //use libcymal to parse log file into ppr_config_t struct 
+    const cyaml_config_t cyaml_cfg = {
+        .log_level = CYAML_LOG_WARNING,       /* adjust for debug */
+        .mem_fn    = cyaml_mem,               /* default allocators */
+        .log_fn    = cyaml_log,               /* default logger */
+    };
+    ppr_config_t *ppr_app_cfg = NULL;
+    cyaml_err_t err = cyaml_load_file(config_file, &cyaml_cfg, &ppr_config_schema, (cyaml_data_t **)&ppr_app_cfg, NULL);
+    if (err != CYAML_OK) {
+        rte_exit(EXIT_FAILURE, "Cannot parse yaml config file %s\n",config_file);
+    }
+    
+
+    /* -------------------- Configure tx core and buffer core mappings -------------------------------------------*/
     //extract the core config parameters from the config file 
-    json_t *core_cfg = json_object_get(config_root, "core_config");
-    int tx_cores = (int)json_integer_value(json_object_get(core_cfg, "tx_cores"));
-    int max_buff_fillers = (int)json_integer_value(json_object_get(core_cfg, "limit_buf_cores"));
+    unsigned int tx_cores         = ppr_app_cfg->thread_settings.tx_cores;
+    unsigned int max_buff_fillers = ppr_app_cfg->thread_settings.limit_buf_cores;
 
     //compute filler to tx core assignmnts 
     unsigned int core_count = rte_lcore_count();
@@ -157,6 +217,39 @@ int main(int argc, char **argv) {
         buff_cores++;
     }
     
+
+    /* ------------------------- Configure DPDK RCU QSBR Struct ---------------------------------------------------*/
+    //multiple subsystems in ppr use RCU QSBR for safe memory reclamation of deferred objects (e.g. retired flow actions, load balancer nodes, etc.)
+    //here we create the main RCU QSBR structure that will be shared with these subsystems. The RCU QSBR structure must know how many reader threads will be using it, so
+    //we pass in the number of worker threads from config file. Note, the flow table manager thread is not a reader, so not included in this count.
+    
+    ppr_rcu_ctx_t *rcu_ctx = rte_zmalloc_socket("ppr_rcu_ctx",
+                                sizeof(ppr_rcu_ctx_t),
+                                RTE_CACHE_LINE_SIZE,
+                                socket_id);
+    if (!rcu_ctx){
+        rte_exit(EXIT_FAILURE, "Cannot allocate memory for RCU QSBR context\n");
+    }
+
+    size_t qs_size = rte_rcu_qsbr_get_memsize(buff_cores);
+    rcu_ctx->qs = rte_zmalloc_socket("ppr_rcu_qsbr",
+                                qs_size,
+                                RTE_CACHE_LINE_SIZE,
+                                socket_id);
+    if (!rcu_ctx->qs){
+        rte_free(rcu_ctx);
+        rte_exit(EXIT_FAILURE, "Cannot allocate memory for RCU QSBR structure\n");
+    }
+
+    int rc = rte_rcu_qsbr_init(rcu_ctx->qs, buff_cores);
+    if (rc != 0) {
+        rte_free(rcu_ctx->qs);
+        rcu_ctx->qs = NULL;
+        return rc;
+    }
+
+    rcu_ctx->num_readers = buff_cores;
+
     /* -------------------------- Initialize Mempools ---------------------------------------------------------------- */
 
     // Creates a new mempool in memory to hold the mbufs. */
@@ -175,94 +268,154 @@ int main(int argc, char **argv) {
 
         core_clone_mempools[i] = rte_pktmbuf_pool_create(name, NUM_MBUFS,
         MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
-        
-        //rte_pktmbuf_pool_create(name, NUM_CLONE_MBUFS,
-        //CLONE_MBUF_CACHE_SIZE, 0, 0, rte_socket_id());
 
         if (core_clone_mempools[i] == NULL)
             rte_exit(EXIT_FAILURE, "Cannot create mbuf pool %s\n",name);
     }
 
 
-    /* -------------------------- Initialize all ports passed into the DPDK app ----------------------------------------- */
+    /* -------------------------- Configure ports --------------------------------------------------------------- */
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+        "\n############################### Initializing Network Ports ###############################\n\n");
+    
+    //temporary variable to track total number of ports added to global port list
+    unsigned int total_port_count = 0;
 
-    uint16_t portid = 0;
-    uint16_t nb_ports = rte_eth_dev_count_avail();
-    printf("number of ports: %d\n", nb_ports);
-    RTE_ETH_FOREACH_DEV(portid) {
-        struct rte_eth_dev_info dev_info;
-        if (rte_eth_dev_info_get(portid, &dev_info) == 0){
-            printf("port %u... %s\n", portid, dev_info.driver_name);
+    //create the global port list array 
+    ppr_ports_t *global_port_list = NULL;
+    ppr_port_list_init(&global_port_list);
+    if (global_port_list == NULL){
+        rte_exit(EXIT_FAILURE, "Cannot create global port list\n");
+    }
+
+    //first we add all real DPDK Ethernet ports specified in the config file
+    //the following loop performs the DPDK port initialization for each interface and adds an entry to the global port list
+    //note, for real DPDK ports, we want a 1:1 mapping of rx/tx queues to worker cores. At runtime we determine if the NIC supports enough
+    //queues to accomplish this. If not we request the maximum number of rx/tx queues per port and round robin assign them to worker cores (next step)
+    
+    //for each port specified in config file, initialize the port and add to global port list
+    for (unsigned int i=0; i < ppr_app_cfg->port_settings_count; i++){
+        
+        PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "Initializing NIC port %s\n",ppr_app_cfg->port_settings[i].name);
+        ppr_port_t *port_cfg = &ppr_app_cfg->port_settings[i];
+
+        /* -------------------------------- Initialize NIC Port from Config File ---------------------------------*/
+        //convert pci bus address string to port id
+        uint16_t dpdk_port_id;
+        ppr_rc = ppr_get_port_id_by_pci_addr(port_cfg->pci_bus_addr, &dpdk_port_id);
+        if (ppr_rc != 0){
+            rte_exit(EXIT_FAILURE, "Cannot find port with pci bus address %s\n",port_cfg->pci_bus_addr);
+        }
+        
+        //build a port config struct 
+        ppr_portinit_cfg_t port_init_cfg;
+
+        //we exclude our special manager worker core from normal port init since it won't directly interact with physical ports 
+        uint16_t num_rx_queues = tx_cores;
+        uint16_t num_tx_queues = tx_cores;
+
+        port_init_cfg.num_rxq = num_rx_queues;
+        port_init_cfg.num_txq = num_tx_queues;
+        port_init_cfg.rx_ring_size = port_cfg->rx_ring_size;
+        port_init_cfg.tx_ring_size = port_cfg->tx_ring_size;
+        port_init_cfg.tx_ip_checksum_offload = port_cfg->tx_ip_checksum_offload;
+        port_init_cfg.tx_tcp_checksum_offload = port_cfg->tx_tcp_checksum_offload;
+        port_init_cfg.tx_udp_checksum_offload = port_cfg->tx_udp_checksum_offload;
+        port_init_cfg.tx_multiseg_offload = port_cfg->tx_multiseg_offload;
+
+        //add port list entry first with queues set to zero, init function will populate actual number of queues created and other metadata
+        ppr_rc = ppr_portlist_add(global_port_list, port_cfg->name, dpdk_port_id, true, PPR_PORT_TYPE_ETHQ, num_rx_queues,num_tx_queues,PPR_PORT_RXTX);
+        if (ppr_rc != 0){
+            rte_exit(EXIT_FAILURE, "Cannot add port %s to global port list\n",port_cfg->name);
         }
 
-        /* Initialize all ports. */
-        if (ps_port_init(portid, app_mempool,tx_cores) != 0){
-                rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu16 "\n",portid);
+        ppr_port_entry_t *port_entry = ppr_find_port_byid(global_port_list, dpdk_port_id);
+        if (port_entry == NULL){
+            rte_exit(EXIT_FAILURE, "Cannot find port entry for port %s after adding to global port list\n",port_cfg->name);
+        }
+
+        //initialize port and record the number of rx/tx queues that were actually created
+        if (ppr_port_init(port_entry,dpdk_port_id, app_mempool, &port_init_cfg) != 0){
+                rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu16 "\n",dpdk_port_id);
+        }
+
+        //initialize port stats
+        ppr_port_stats_init(port_entry);
+
+        //this is the index we use to reference this port externally in egress tables etc.
+        uint16_t global_port_index = port_entry->global_port_index;
+
+        total_port_count++;
+        PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "Successfully initialized port %s with DPDK port ID %"PRIu16" and global port index %"PRIu16"\n", 
+            port_cfg->name, dpdk_port_id, global_port_index);
+        PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\n");
+
+    }
+
+    /* -------------------------- Initialize Global Policy Epochs ------------------------------------------------------- */
+    //the PPR application is based around dynamic policy tables (egress table, ACL table etc) that can be updated at runtime.
+    //the policy tables are cached in per worker core flow tables for performance. To ensure that worker cores always have the latest policy info,
+    //we use an epoch based system. Each global policy table has an associated epoch counter that is incremented each time the table is updated.
+    //Each worker core tracks the epoch of each policy table it has cached. When processing packets, if a worker core sees that the global epoch for
+    //a given policy table is different than its cached epoch, it knows to refresh its cached policy info from that table. This allows for
+    //efficient asynchronous policy updates without locking or complex synchronization between worker cores and control plane threads updating the policy tables.
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+        "\n############################### Initializing Global Policy Epochs ###############################\n");
+    
+    //create global policy epochs struct
+    ppr_global_policy_epoch_t *global_policy_epochs = rte_zmalloc_socket("global_policy_epochs",
+                                            sizeof(ppr_global_policy_epoch_t),
+                                            RTE_CACHE_LINE_SIZE,
+                                            socket_id);
+    if (global_policy_epochs == NULL) {
+        rte_exit(EXIT_FAILURE, "Cannot create global policy epochs struct\n");
+    }
+
+    //intialize all epochs to 1, separate epochs for each policy table
+    //when a flow table entry is created, it caches the current epoch for each policy table
+    //flow entries also indicate which policy table was the "decider" for the action applied to the packet
+    //this allows us to only refresh the relevant policy table when epochs differ
+    
+    global_policy_epochs->acl_policy_epoch      = 1;   //the ACL ruleset has been updated
+    global_policy_epochs->lb_policy_epoch       = 1;   //the load balancer groupings have been updated 
+
+    /* -------------------------- Initialize ACL Table ---------------------------------------------------------- */
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+        "\n############################### Initializing ACL Table ###############################\n");
+    
+    //create an ACL database to hold runtime rules issued by the user 
+    ppr_acl_rule_db_t ppr_acl_rules_db; 
+    ppr_acl_rule_db_init (&ppr_acl_rules_db);
+
+    //create a runtime context for ACL processing 
+    uint32_t acl_qsbr_reclaim_trigger = ppr_app_cfg->acl_table_settings.qsbr_reclaim_size;
+    uint32_t acl_qsbr_reclaim_limit   = ppr_app_cfg->acl_table_settings.qsbr_reclaim_limit;
+
+    ppr_acl_runtime_t ppr_acl_runtime_ctx; 
+    ppr_rc = ppr_acl_runtime_init(&ppr_acl_runtime_ctx, rte_socket_id(), rcu_ctx, global_policy_epochs,acl_qsbr_reclaim_trigger, acl_qsbr_reclaim_limit, buff_cores);
+    if (ppr_rc != 0){
+        rte_exit(EXIT_FAILURE, "Failed to initialize ACL runtime context\n");
+    }
+
+    //if a startup rules file was provided, load it now
+    if (ppr_app_cfg->acl_table_settings.startup_cfg_file != NULL && ppr_app_cfg->acl_table_settings.startup_cfg_file[0] != '\0') {
+        int rc = ppr_acl_load_startup_file(
+            ppr_app_cfg->acl_table_settings.startup_cfg_file,
+            &ppr_acl_rules_db,
+            global_port_list);
+        if (rc < 0) {
+            rte_exit(EXIT_FAILURE, "Failed to load ACL startup rules file %s\n",
+                ppr_app_cfg->acl_table_settings.startup_cfg_file);
         }
     }
 
-    /* -------------------------- Initialize global flowtable -------------------------------------------------------------- */
-    //create a default action for the flow table
+    ppr_rc = ppr_acl_db_commit(&ppr_acl_runtime_ctx, &ppr_acl_rules_db);
+    if (ppr_rc != 0){
+        rte_exit(EXIT_FAILURE, "Failed to commit loaded ACL rules to runtime\n");
+    }
+
 
     /* -------------------------- Initialize all shared memory structures for pthreads & DPDK workers ---------------------- */
-
-    //stats container 
-    shared_app_stats = calloc(1, sizeof(struct psmith_stats_all));
-    shared_app_stats->port_stats = calloc(1,sizeof(struct all_port_stats));
-    shared_app_stats->buff_stats = calloc(1,sizeof(struct all_buff_worker_stats));
-    shared_app_stats->tx_stats   = calloc(1,sizeof(struct all_tx_worker_stats));
-    shared_app_stats->mem_stats  = calloc(1,sizeof(struct all_memory_stats));
-    shared_app_stats->mem_stats->mstats = (struct mempool_stats*)calloc(tx_cores+1,sizeof(struct mempool_stats));
-
-    //initialize per port stats 
-    pthread_mutex_init(&shared_app_stats->port_stats->lock,NULL); 
-    shared_app_stats->port_stats->num_ports = nb_ports;
-    shared_app_stats->port_stats->per_port_stats = calloc(nb_ports, sizeof(struct single_port_stats));
-    
-    for(int i=0; i<nb_ports;i++){
-
-        //figure out how many xstats are associaed with the port
-        int n_xstats = rte_eth_xstats_get(i, NULL, 0);
-        if (n_xstats < 0) {
-            printf("Failed to get xstats count\n");
-            return -1;
-        }
-        shared_app_stats->port_stats->per_port_stats[i].n_xstats = n_xstats;
-        shared_app_stats->port_stats->per_port_stats[i].port_stats_names    = calloc(n_xstats, sizeof(struct rte_eth_xstat_name));
-        shared_app_stats->port_stats->per_port_stats[i].prev_port_stats     = calloc(n_xstats, sizeof(struct rte_eth_xstat));
-        shared_app_stats->port_stats->per_port_stats[i].current_port_stats  = calloc(n_xstats, sizeof(struct rte_eth_xstat));
-        shared_app_stats->port_stats->per_port_stats[i].rates_port_stats    = calloc(n_xstats, sizeof(struct rte_eth_xstat));
-
-        //preload xstat names array so we don't have to do it later 
-        int ret = rte_eth_xstats_get_names(i, shared_app_stats->port_stats->per_port_stats[i].port_stats_names, n_xstats);
-        if (ret < 0 || ret > n_xstats){
-            rte_exit(EXIT_FAILURE, "Error: rte_eth_xstats_get_names() failed\n");
-        }
-
-        //initialize timestamps 
-        clock_gettime(CLOCK_MONOTONIC, &shared_app_stats->port_stats->per_port_stats[i].prev_ts);
-        clock_gettime(CLOCK_MONOTONIC, &shared_app_stats->port_stats->per_port_stats[i].curr_ts);
-    }
-
-    //initialize tx worker core stats 
-    pthread_mutex_init(&shared_app_stats->tx_stats->lock,NULL);   
-    shared_app_stats->tx_stats->num_workers = tx_cores;  
-    shared_app_stats->tx_stats->prev_tx_worker_stats    = calloc(tx_cores, sizeof(struct single_tx_worker_stat_seq));
-    shared_app_stats->tx_stats->current_tx_worker_stats = calloc(tx_cores, sizeof(struct single_tx_worker_stat_seq));
-    shared_app_stats->tx_stats->rates_tx_worker_stats   = calloc(tx_cores, sizeof(struct single_tx_worker_stat_seq));
-    //initialize timestamps 
-    clock_gettime(CLOCK_MONOTONIC, &shared_app_stats->tx_stats->prev_ts);
-    clock_gettime(CLOCK_MONOTONIC, &shared_app_stats->tx_stats->curr_ts);
-
-    //initialize buffer worker core stats 
-    pthread_mutex_init(&shared_app_stats->tx_stats->lock,NULL);   
-    shared_app_stats->buff_stats->num_workers = buff_cores;  
-    shared_app_stats->buff_stats->prev_buff_worker_stats    = calloc(tx_cores, sizeof(struct single_buff_worker_stat_seq));
-    shared_app_stats->buff_stats->current_buff_worker_stats = calloc(tx_cores, sizeof(struct single_buff_worker_stat_seq));
-    shared_app_stats->buff_stats->rates_buff_worker_stats   = calloc(tx_cores, sizeof(struct single_buff_worker_stat_seq));
-    //initialize timestamps 
-    clock_gettime(CLOCK_MONOTONIC, &shared_app_stats->buff_stats->prev_ts);
-    clock_gettime(CLOCK_MONOTONIC, &shared_app_stats->buff_stats->curr_ts);
 
     //shared app control memory 
     shared_app_state = calloc(1, sizeof(struct psmith_app_state));
@@ -270,17 +423,17 @@ int main(int argc, char **argv) {
     shared_app_state->mbuf_ts_off = mbuf_time_offset;
     shared_app_state->num_tx_cores = tx_cores;
     shared_app_state->num_buf_cores = buff_cores;
-    shared_app_state->ports_configured = nb_ports;
-    shared_app_state->port_status = calloc(nb_ports,sizeof(unsigned int));
-    shared_app_state->port_enable = calloc(nb_ports,sizeof(unsigned int));
-    shared_app_state->virt_channels_per_port = calloc(nb_ports,sizeof(unsigned int));
+    shared_app_state->ports_configured = total_port_count;
+    shared_app_state->port_status = calloc(total_port_count,sizeof(unsigned int));
+    shared_app_state->port_enable = calloc(total_port_count,sizeof(unsigned int));
+    shared_app_state->virt_channels_per_port = calloc(total_port_count,sizeof(unsigned int));
     shared_app_state->pcap_template_mpool = app_mempool;
     shared_app_state->txcore_clone_mpools = core_clone_mempools;
     shared_app_state->pcap_storage_t = calloc(1, sizeof(struct pcap_storage));
-    shared_app_state->pcap_storage_t->slot_assignments = calloc(nb_ports,sizeof(int*));
+    shared_app_state->pcap_storage_t->slot_assignments = calloc(total_port_count,sizeof(int*));
 
     //init slot assignments for each port 
-    for(int i=0; i<nb_ports;i++){
+    for(int i=0; i<total_port_count;i++){
         shared_app_state->pcap_storage_t->slot_assignments[i] = calloc(tx_cores,sizeof(int));
         for (int j=0; j<tx_cores;j++){
             shared_app_state->pcap_storage_t->slot_assignments[i][j] = -1;
@@ -296,50 +449,28 @@ int main(int argc, char **argv) {
     struct pcap_loader_ctl *pcap_controller;
     pcap_controller = calloc(1, sizeof(struct pcap_loader_ctl));
 
-    //shared memory for flowtable controller interface 
-    struct ft_manager_ctl *ft_controller;
-    ft_controller = calloc(1, sizeof(struct ft_manager_ctl));
-
     //create pthread args to pass shared resources 
-    struct pthread_args *stats_args, *control_args, *pcap_loader_args, *ft_manager_args; 
-
-    stats_args = calloc(1,sizeof(struct pthread_args));
-    stats_args->global_stats = shared_app_stats;
-    stats_args->global_state = shared_app_state;
-    //stats_args->global_flowtable = global_ft; 
-    stats_args->pcap_controller = pcap_controller;
-    stats_args->ft_controller = ft_controller;
-    stats_args->private_args = (void *)&stats_poll_rate_ms; 
+    struct pthread_args *control_args, *pcap_loader_args;
 
     control_args = calloc(1,sizeof(struct pthread_args));
-    control_args->global_stats = shared_app_stats;
     control_args->global_state = shared_app_state;
     //control_args->global_flowtable = global_ft;
     control_args->pcap_controller = pcap_controller;
-    control_args->ft_controller = ft_controller;
     control_args->private_args = (void *)&ctl_port;
 
     pcap_loader_args = calloc(1,sizeof(struct pthread_args));
-    pcap_loader_args->global_stats = shared_app_stats;
+    //pcap_loader_args->global_stats = shared_app_stats;
     pcap_loader_args->global_state = shared_app_state;
     //pcap_loader_args->global_flowtable = global_ft;
     pcap_loader_args->pcap_controller = pcap_controller;    
-    pcap_loader_args->ft_controller = ft_controller;
 
-    ft_manager_args = calloc(1,sizeof(struct pthread_args));
-    ft_manager_args->global_stats = shared_app_stats;
-    ft_manager_args->global_state = shared_app_state;
-    //ft_manager_args->global_flowtable = global_ft;
-    ft_manager_args->pcap_controller = pcap_controller;   
-    ft_manager_args->ft_controller = ft_controller; 
-    
     /* -------------------------- Create shared memory structures for Buffer Filler to Tx Core Packet Transmission ------------------------------*/
 
     //create and init all rx rings used to communicate between buffer and tx cores 
-    struct rte_ring *rx_tx_rings[tx_cores][nb_ports][buffs_per_core];
+    struct rte_ring *rx_tx_rings[tx_cores][total_port_count][buffs_per_core];
 
     for (int i=0; i<tx_cores;i++){
-        for (int j=0; j<nb_ports;j++){
+        for (int j=0; j<total_port_count;j++){
             for(int k=0;k<buffs_per_core;k++){
                 //for each port + buffer combo, create a rte_ring, and assign it to the buffer core 
                 char name[32]; 
@@ -366,16 +497,16 @@ int main(int argc, char **argv) {
     for(int i=0; i<tx_cores;i++){
         tx_args_array[i].global_state = shared_app_state;
         tx_args_array[i].global_stats = shared_app_stats;
-        tx_args_array[i].num_buffer_rings = calloc(nb_ports,sizeof(unsigned int));
+        tx_args_array[i].num_buffer_rings = calloc(total_port_count,sizeof(unsigned int));
         tx_args_array[i].clone_mpool  = core_clone_mempools[i];
-        tx_args_array[i].num_ports = nb_ports;
+        tx_args_array[i].num_ports = total_port_count;
         tx_args_array[i].tx_thread_index = i;
         tx_args_array[i].core_map = core_map;
         //tx_args_array[i].global_flowtable = global_ft;
 
         //give tx core a pointer to all of its rx rings 
-        tx_args_array[i].buffer_rings = (struct rte_ring ***)calloc(nb_ports,sizeof(struct rte_ring **));
-        for (int l =0;l<nb_ports;l++){
+        tx_args_array[i].buffer_rings = (struct rte_ring ***)calloc(total_port_count,sizeof(struct rte_ring **));
+        for (int l =0;l<total_port_count;l++){
             tx_args_array[i].buffer_rings[l] = (struct rte_ring **)calloc(buffs_per_core, sizeof(struct rte_ring*));
             tx_args_array[i].num_buffer_rings[l] = buffs_per_core;
             
@@ -392,19 +523,19 @@ int main(int argc, char **argv) {
             buff_args_array[buf_ctr].global_stats           = shared_app_stats; 
             buff_args_array[buf_ctr].clone_mpool            = core_clone_mempools[i];
             buff_args_array[buf_ctr].linked_tx_core         = i;
-            buff_args_array[buf_ctr].num_ports              = nb_ports;
+            buff_args_array[buf_ctr].num_ports              = total_port_count;
             //buff_args_array[buf_ctr].global_flowtable       = global_ft;
 
             //setup parameters for dynamic expansion mode 
             buff_args_array[buf_ctr].virt_ip_cnt            = 65536;
             buff_args_array[buf_ctr].tsc_hz                 = tsc_hz;
-            buff_args_array[buf_ctr].virtual_flows          = calloc(nb_ports,sizeof(struct virtual_flow *));
+            buff_args_array[buf_ctr].virtual_flows          = calloc(total_port_count,sizeof(struct virtual_flow *));
 
             //allocate space for buffer_rings
-            buff_args_array[buf_ctr].buffer_rings           = (struct rte_ring **)calloc(nb_ports,sizeof(struct rte_ring*));
+            buff_args_array[buf_ctr].buffer_rings           = (struct rte_ring **)calloc(total_port_count,sizeof(struct rte_ring*));
 
             //for each configured port
-            for (int k = 0; k < nb_ports; k++){           
+            for (int k = 0; k < total_port_count; k++){           
                 buff_args_array[buf_ctr].buffer_rings[k] = rx_tx_rings[i][k][j]; //assign this buffer threads unique port + ring index
 
                 //make sure each virtual flow knows its index
@@ -443,30 +574,17 @@ int main(int argc, char **argv) {
     CPU_SET(main_lcore_id, &cpuset);
 
     //launch and bind control server thread 
-    if (pthread_create(&controller_thread, NULL, run_control_server,control_args) != 0){
+    if (pthread_create(&controller_thread, NULL, run_ppr_app_server_thread,control_args) != 0){
         rte_exit(EXIT_FAILURE, "Control thread creation failed\n");
     }
-
-    //launch and bind stats collector thread 
-    if (pthread_create(&stats_thread, NULL, run_stats_thread,stats_args) != 0){
-        rte_exit(EXIT_FAILURE, "stats thread creation failed\n");
-    }
-
     //launch and bind pcap loader thread 
     if (pthread_create(&pcap_loader_thread, NULL, run_pcap_loader_thread,pcap_loader_args) != 0){
         rte_exit(EXIT_FAILURE, "pcap loader thread creation failed\n");
     }
 
-    //launch and bind ft_manager thread 
-    if (pthread_create(&ft_manager_thread, NULL, run_ft_manager_thread,ft_manager_args) != 0){
-        rte_exit(EXIT_FAILURE, "flowtable manager thread creation failed\n");
-    }
-
     //make sure support threads only run on main CPU, don't want them bothering DPDK tx / buffer threads
     pthread_setaffinity_np(controller_thread, sizeof(cpu_set_t), &cpuset);
-    pthread_setaffinity_np(stats_thread, sizeof(cpu_set_t), &cpuset);
     pthread_setaffinity_np(pcap_loader_thread, sizeof(cpu_set_t), &cpuset);
-    pthread_setaffinity_np(ft_manager_thread, sizeof(cpu_set_t), &cpuset);
     
     /* -------------------------- Mark app as initialized, end of init thread until exit ------------------ */
 
@@ -478,9 +596,7 @@ int main(int argc, char **argv) {
     //wait and clean up
     rte_eal_mp_wait_lcore();
     pthread_join(controller_thread, NULL);
-    pthread_join(stats_thread, NULL);
     pthread_join(pcap_loader_thread, NULL);
-    pthread_join(ft_manager_thread, NULL);
     printf("Application exiting cleanly");
     return 0;
 }
