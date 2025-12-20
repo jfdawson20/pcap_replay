@@ -93,16 +93,9 @@ int main(int argc, char **argv) {
     pthread_t controller_thread;
     pthread_t stats_thread; 
     pthread_t pcap_loader_thread; 
-    pthread_t ft_manager_thread; 
-    unsigned int ctl_port = 9000; 
-    unsigned int stats_poll_rate_ms = 500; 
 
-    struct rte_mempool *app_mempool = NULL;
-    struct rte_mempool **core_clone_mempools = NULL; 
-
-    //shared memory structures for stats and app state 
-    struct psmith_stats_all *shared_app_stats;
-    struct psmith_app_state *shared_app_state; 
+    struct rte_mempool *app_mempool             = NULL;
+    struct rte_mempool **core_clone_mempools    = NULL; 
 
     //start init, note we use PPR_LOG macro defined in ppr_log.h for all logging, this allows for different log levels and per module logging control
     PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\Pcap Replay Application Starting\n\n");
@@ -133,11 +126,11 @@ int main(int argc, char **argv) {
 
     //assumption today is all systems are NUMA single socket, so we get the socket id for future use
     int socket_id = rte_socket_id();
-
-    uint64_t tsc_hz = rte_get_tsc_hz();
     
+    //setup timestamp fields 
     int mbuf_time_offset;
     init_mbuf_tstamps(&mbuf_time_offset);
+
     //bump cli args based on number processed by EAL 
     argc -=ret;
     argv += ret;
@@ -169,54 +162,7 @@ int main(int argc, char **argv) {
     }
     
 
-    /* -------------------- Configure tx core and buffer core mappings -------------------------------------------*/
-    //extract the core config parameters from the config file 
-    unsigned int tx_cores         = ppr_app_cfg->thread_settings.tx_cores;
-    unsigned int max_buff_fillers = ppr_app_cfg->thread_settings.limit_buf_cores;
-
-    //compute filler to tx core assignmnts 
-    unsigned int core_count = rte_lcore_count();
-    RTE_LOG(INFO, EAL, "DPDK sees %u lcores\n", core_count);
-
-    //init struct to track tx <-> filler core mapping 
-    //assume no more that 256 theads per tx core... 
-    struct core_mapping *core_map = calloc(tx_cores,sizeof(struct core_mapping));
-    for (int i=0; i<tx_cores; i++){
-        core_map[i].tx_core = i+2;
-        core_map[i].filler_cores = calloc(256, sizeof(int));
-        core_map[i].total_fillers = 0;
-    }
-
-    //make sure we have a minimum number of cores
-    if ((core_count - 2 - tx_cores) < tx_cores){
-        rte_exit(EXIT_FAILURE,"Insufficent Filler Cores Available");
-    }
-
-    //calculate maximum core id 
-    int buffs_per_core = ((core_count - 2 - tx_cores) / tx_cores);
-    int max_buff_id    = buffs_per_core * tx_cores;
-
-    printf("buffs_per_core: %d\n",buffs_per_core);
-    printf("max_buff_id: %d\n",max_buff_id);    
-
-    //round robin assign remaining cores to tx cores 
-    //reserve cores 0-1 for DPDK management and linux
-    unsigned int buff_cores = 0; 
-    for(int i=(tx_cores+2);i < tx_cores+2+max_buff_id;i++){
-        
-        //if we've hit buffer core limit, skip
-        if ((core_map[i%tx_cores].total_fillers) > max_buff_fillers-1){
-            continue;
-        }
-
-        core_map[i%tx_cores].filler_cores[core_map[i%tx_cores].total_fillers] = i;
-        core_map[i%tx_cores].total_fillers++; 
-
-        RTE_LOG(INFO, EAL, "Mapping buffer filler core %d to tx core %d\n", i, (i%tx_cores)+2);
-
-        buff_cores++;
-    }
-    
+    unsigned int tx_cores     = ppr_app_cfg->thread_settings.tx_cores;
 
     /* ------------------------- Configure DPDK RCU QSBR Struct ---------------------------------------------------*/
     //multiple subsystems in ppr use RCU QSBR for safe memory reclamation of deferred objects (e.g. retired flow actions, load balancer nodes, etc.)
@@ -231,7 +177,7 @@ int main(int argc, char **argv) {
         rte_exit(EXIT_FAILURE, "Cannot allocate memory for RCU QSBR context\n");
     }
 
-    size_t qs_size = rte_rcu_qsbr_get_memsize(buff_cores);
+    size_t qs_size = rte_rcu_qsbr_get_memsize(tx_cores);
     rcu_ctx->qs = rte_zmalloc_socket("ppr_rcu_qsbr",
                                 qs_size,
                                 RTE_CACHE_LINE_SIZE,
@@ -241,14 +187,14 @@ int main(int argc, char **argv) {
         rte_exit(EXIT_FAILURE, "Cannot allocate memory for RCU QSBR structure\n");
     }
 
-    int rc = rte_rcu_qsbr_init(rcu_ctx->qs, buff_cores);
+    int rc = rte_rcu_qsbr_init(rcu_ctx->qs, tx_cores);
     if (rc != 0) {
         rte_free(rcu_ctx->qs);
         rcu_ctx->qs = NULL;
         return rc;
     }
 
-    rcu_ctx->num_readers = buff_cores;
+    rcu_ctx->num_readers = tx_cores;
 
     /* -------------------------- Initialize Mempools ---------------------------------------------------------------- */
 
@@ -379,6 +325,8 @@ int main(int argc, char **argv) {
     global_policy_epochs->acl_policy_epoch      = 1;   //the ACL ruleset has been updated
     global_policy_epochs->lb_policy_epoch       = 1;   //the load balancer groupings have been updated 
 
+
+
     /* -------------------------- Initialize ACL Table ---------------------------------------------------------- */
     PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### Initializing ACL Table ###############################\n");
@@ -392,7 +340,7 @@ int main(int argc, char **argv) {
     uint32_t acl_qsbr_reclaim_limit   = ppr_app_cfg->acl_table_settings.qsbr_reclaim_limit;
 
     ppr_acl_runtime_t ppr_acl_runtime_ctx; 
-    ppr_rc = ppr_acl_runtime_init(&ppr_acl_runtime_ctx, rte_socket_id(), rcu_ctx, global_policy_epochs,acl_qsbr_reclaim_trigger, acl_qsbr_reclaim_limit, buff_cores);
+    ppr_rc = ppr_acl_runtime_init(&ppr_acl_runtime_ctx, rte_socket_id(), rcu_ctx, global_policy_epochs,acl_qsbr_reclaim_trigger, acl_qsbr_reclaim_limit, tx_cores);
     if (ppr_rc != 0){
         rte_exit(EXIT_FAILURE, "Failed to initialize ACL runtime context\n");
     }
@@ -414,158 +362,24 @@ int main(int argc, char **argv) {
         rte_exit(EXIT_FAILURE, "Failed to commit loaded ACL rules to runtime\n");
     }
 
-
-    /* -------------------------- Initialize all shared memory structures for pthreads & DPDK workers ---------------------- */
-
-    //shared app control memory 
-    shared_app_state = calloc(1, sizeof(struct psmith_app_state));
-    shared_app_state->tx_buff_core_mapping = core_map; 
-    shared_app_state->mbuf_ts_off = mbuf_time_offset;
-    shared_app_state->num_tx_cores = tx_cores;
-    shared_app_state->num_buf_cores = buff_cores;
-    shared_app_state->ports_configured = total_port_count;
-    shared_app_state->port_status = calloc(total_port_count,sizeof(unsigned int));
-    shared_app_state->port_enable = calloc(total_port_count,sizeof(unsigned int));
-    shared_app_state->virt_channels_per_port = calloc(total_port_count,sizeof(unsigned int));
-    shared_app_state->pcap_template_mpool = app_mempool;
-    shared_app_state->txcore_clone_mpools = core_clone_mempools;
-    shared_app_state->pcap_storage_t = calloc(1, sizeof(struct pcap_storage));
-    shared_app_state->pcap_storage_t->slot_assignments = calloc(total_port_count,sizeof(int*));
-
-    //init slot assignments for each port 
-    for(int i=0; i<total_port_count;i++){
-        shared_app_state->pcap_storage_t->slot_assignments[i] = calloc(tx_cores,sizeof(int));
-        for (int j=0; j<tx_cores;j++){
-            shared_app_state->pcap_storage_t->slot_assignments[i][j] = -1;
-        }
-
-        shared_app_state->virt_channels_per_port[i] = 1;
-    }
+    /* -------------------------- Global Stats Init ----------------------------------------------- */
 
 
-    pthread_mutex_init(&shared_app_state->lock, NULL);
 
-    //shared memory for pcap loading status
-    struct pcap_loader_ctl *pcap_controller;
-    pcap_controller = calloc(1, sizeof(struct pcap_loader_ctl));
+    /* -------------------------- Pcap Loader Init ----------------------------------------------- */
 
-    //create pthread args to pass shared resources 
-    struct pthread_args *control_args, *pcap_loader_args;
 
-    control_args = calloc(1,sizeof(struct pthread_args));
-    control_args->global_state = shared_app_state;
-    //control_args->global_flowtable = global_ft;
-    control_args->pcap_controller = pcap_controller;
-    control_args->private_args = (void *)&ctl_port;
 
-    pcap_loader_args = calloc(1,sizeof(struct pthread_args));
-    //pcap_loader_args->global_stats = shared_app_stats;
-    pcap_loader_args->global_state = shared_app_state;
-    //pcap_loader_args->global_flowtable = global_ft;
-    pcap_loader_args->pcap_controller = pcap_controller;    
-
-    /* -------------------------- Create shared memory structures for Buffer Filler to Tx Core Packet Transmission ------------------------------*/
-
-    //create and init all rx rings used to communicate between buffer and tx cores 
-    struct rte_ring *rx_tx_rings[tx_cores][total_port_count][buffs_per_core];
-
-    for (int i=0; i<tx_cores;i++){
-        for (int j=0; j<total_port_count;j++){
-            for(int k=0;k<buffs_per_core;k++){
-                //for each port + buffer combo, create a rte_ring, and assign it to the buffer core 
-                char name[32]; 
-                int n = snprintf(name,sizeof(name),"txc_%d_pid_%d_bc_%d_r",i,j,k);
-                if (n < 0 || n >= (int)sizeof(name)) rte_exit(EXIT_FAILURE, "name too long\n");
-
-                printf("ringname: %s\n",name);
-                struct rte_ring *r = rte_ring_create(name,RXTX_RING_SIZE,rte_socket_id(),RING_F_SC_DEQ);   // single-consumer fast path
-                if (!r) 
-                    rte_panic("ring create failed\n");
-
-                rx_tx_rings[i][j][k] = r;
-            }
-        }
-    }
-
+    /* -------------------------- Build and Launch Threads -----------------------------------------------*/
     
-    // create tx and buffer filler cores 
-    //filler cores are indexed through the tx core they are assigned to 
-    struct tx_worker_args *tx_args_array = (struct tx_worker_args *)calloc(tx_cores,sizeof(struct tx_worker_args));
-    struct buff_worker_args *buff_args_array = (struct buff_worker_args *)calloc(buff_cores,sizeof(struct buff_worker_args));
-    int buf_ctr = 0;
+    /* Worker Tx Threads */
 
-    for(int i=0; i<tx_cores;i++){
-        tx_args_array[i].global_state = shared_app_state;
-        tx_args_array[i].global_stats = shared_app_stats;
-        tx_args_array[i].num_buffer_rings = calloc(total_port_count,sizeof(unsigned int));
-        tx_args_array[i].clone_mpool  = core_clone_mempools[i];
-        tx_args_array[i].num_ports = total_port_count;
-        tx_args_array[i].tx_thread_index = i;
-        tx_args_array[i].core_map = core_map;
-        //tx_args_array[i].global_flowtable = global_ft;
+    /* Stats pthread */
 
-        //give tx core a pointer to all of its rx rings 
-        tx_args_array[i].buffer_rings = (struct rte_ring ***)calloc(total_port_count,sizeof(struct rte_ring **));
-        for (int l =0;l<total_port_count;l++){
-            tx_args_array[i].buffer_rings[l] = (struct rte_ring **)calloc(buffs_per_core, sizeof(struct rte_ring*));
-            tx_args_array[i].num_buffer_rings[l] = buffs_per_core;
-            
-            for(int m =0;m<buffs_per_core;m++){
-                tx_args_array[i].buffer_rings[l][m] = rx_tx_rings[i][l][m];
-            }
-        }
+    /* Pcap Loader pthread */
 
+    /* Control Server pthread */
 
-        //for each buffer filler linked to this tx core 
-        for (int j=0; j < core_map[i].total_fillers; j++){
-            buff_args_array[buf_ctr].buff_thread_index      = buf_ctr;
-            buff_args_array[buf_ctr].global_state           = shared_app_state;
-            buff_args_array[buf_ctr].global_stats           = shared_app_stats; 
-            buff_args_array[buf_ctr].clone_mpool            = core_clone_mempools[i];
-            buff_args_array[buf_ctr].linked_tx_core         = i;
-            buff_args_array[buf_ctr].num_ports              = total_port_count;
-            //buff_args_array[buf_ctr].global_flowtable       = global_ft;
-
-            //setup parameters for dynamic expansion mode 
-            buff_args_array[buf_ctr].virt_ip_cnt            = 65536;
-            buff_args_array[buf_ctr].tsc_hz                 = tsc_hz;
-            buff_args_array[buf_ctr].virtual_flows          = calloc(total_port_count,sizeof(struct virtual_flow *));
-
-            //allocate space for buffer_rings
-            buff_args_array[buf_ctr].buffer_rings           = (struct rte_ring **)calloc(total_port_count,sizeof(struct rte_ring*));
-
-            //for each configured port
-            for (int k = 0; k < total_port_count; k++){           
-                buff_args_array[buf_ctr].buffer_rings[k] = rx_tx_rings[i][k][j]; //assign this buffer threads unique port + ring index
-
-                //make sure each virtual flow knows its index
-                buff_args_array[buf_ctr].virtual_flows[k] = calloc(65536,sizeof(struct virtual_flow));
-                for(int l=0;l < buff_args_array[buf_ctr].virt_ip_cnt; l++){
-                    buff_args_array[buf_ctr].virtual_flows[k][l].vert_flow_index = l; 
-                }
-            }
-
-            buf_ctr++;
-        }
-
-    }
-
-    /* -------------------------- Launch DPDK Worker Cores -------------------------------------------- */
-
-    // Launch DPDK tx workers with tx args
-    for(int i=2;i<tx_cores+2;i++){
-        rte_eal_remote_launch(tx_worker, &tx_args_array[i-2], i);
-    }
-
-    // Launch DPDK buffer filler workers with buff args 
-    buf_ctr = 0;
-    for(int i=0;i<tx_cores;i++){
-        for (int j=0; j< core_map[i].total_fillers;j++){
-            rte_eal_remote_launch(buffer_worker, &buff_args_array[buf_ctr], core_map[i].filler_cores[j]);
-            buf_ctr++;
-        }
-    }
-    
     /* -------------------------- Launch sevice pthreads that run on the main core ---------------------- */
 
     //Configure and Launch support pthreads on main core 
@@ -573,30 +387,15 @@ int main(int argc, char **argv) {
     CPU_ZERO(&cpuset);
     CPU_SET(main_lcore_id, &cpuset);
 
-    //launch and bind control server thread 
-    if (pthread_create(&controller_thread, NULL, run_ppr_app_server_thread,control_args) != 0){
-        rte_exit(EXIT_FAILURE, "Control thread creation failed\n");
-    }
-    //launch and bind pcap loader thread 
-    if (pthread_create(&pcap_loader_thread, NULL, run_pcap_loader_thread,pcap_loader_args) != 0){
-        rte_exit(EXIT_FAILURE, "pcap loader thread creation failed\n");
-    }
-
-    //make sure support threads only run on main CPU, don't want them bothering DPDK tx / buffer threads
-    pthread_setaffinity_np(controller_thread, sizeof(cpu_set_t), &cpuset);
-    pthread_setaffinity_np(pcap_loader_thread, sizeof(cpu_set_t), &cpuset);
+    
     
     /* -------------------------- Mark app as initialized, end of init thread until exit ------------------ */
 
     //mark app as initialized 
-    pthread_mutex_lock(&shared_app_state->lock);
-    shared_app_state->app_initialized = true;
-    pthread_mutex_unlock(&shared_app_state->lock);
 
     //wait and clean up
     rte_eal_mp_wait_lcore();
-    pthread_join(controller_thread, NULL);
-    pthread_join(pcap_loader_thread, NULL);
+
     printf("Application exiting cleanly");
     return 0;
 }

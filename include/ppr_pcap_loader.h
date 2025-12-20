@@ -13,18 +13,20 @@ Description: header file for pcap_loader code and data types
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 
 typedef enum pcap_cmd {
     CMD_NONE,
     CMD_LOAD_PCAP,
+    CMD_APPLY_ACL_RULES,   //pre-parse and apply acl rules to loaded pcaps
     CMD_EXIT
 } pcap_cmd_t;
 
 typedef enum pcap_replay {
     UNASSIGNED,
     REPLAY_DIRECT,
-    DYN_EXPAND
+    ACL_REPLAY,
 } pcap_replay_t;
 
 typedef struct pcap_loader_ctl {
@@ -41,12 +43,12 @@ typedef struct pcap_loader_ctl {
     unsigned int    latest_slotid;
 } pcap_loader_ctl_t;
 
-typedef struct pcap_storage {
-    struct pcap_mbuff_slot *slots;  // dynamic array of slots
-    size_t count;                   // number of slots currently in use
-    size_t capacity;                // allocated size of slots array
-    unsigned int **slot_assignments;  // which slot is assigned to which output port and by tx core
-} pcap_storage_t;
+
+typedef struct mbuf_array {
+    struct rte_mbuf **pkts;   // array of mbuf pointers
+    size_t count;             // how many are used
+    size_t capacity;          // how many allocated
+} mbuf_array_t;
 
 //pcap mbuff slot contains a mbuf array 
 typedef struct pcap_mbuff_slot {
@@ -58,14 +60,19 @@ typedef struct pcap_mbuff_slot {
     uint64_t            delta_ns; 
     uint64_t            size_in_bytes;
     pcap_replay_t        mode; 
-    struct mbuf_array   *mbuf_array; 
+    mbuf_array_t        *mbuf_array; 
 } pcap_mbuff_slot_t;
 
-typedef struct mbuf_array {
-    struct rte_mbuf **pkts;   // array of mbuf pointers
-    size_t count;             // how many are used
-    size_t capacity;          // how many allocated
-} mbuf_array_t;
+
+typedef struct pcap_storage {
+    pcap_mbuff_slot_t *slots;  // dynamic array of slots
+    size_t count;                   // number of slots currently in use
+    size_t capacity;                // allocated size of slots array
+    unsigned int **slot_assignments;  // which slot is assigned to which output port and by tx core
+} pcap_storage_t;
+
+
+
 
 //struct for dynamic client flow expansion
 typedef struct virtual_flow { 

@@ -7,7 +7,7 @@ srcs = files(
   'ppr_ports.c',
   'ppr_port_rpc.c',
   'ppr_pcap_loader.c',
-  'ppr_buff_worker.c',
+  'ppr_pcap_loader_rpc.c',
   'ppr_tx_worker.c',
   'ppr_mbuf_fields.c',
   'ppr_log.c',

@@ -51,10 +51,8 @@ typedef struct ppr_multi_tenant_settings{
 
 /* thread_settings */
 typedef struct ppr_thread_settings{
-    uint32_t  total_cores; 
     uint32_t  tx_cores;
     uint32_t  base_lcore_id;
-    uint32_t  limit_buf_cores;
 } ppr_thread_settings_t;
 
 /* port_settings[] entry */

@@ -87,27 +87,43 @@ struct buff_worker_args {
 
 
 /* per thread struct with globals */
-typedef struct {
+typedef struct ppr_thread_args{
+
     //identifiers
     unsigned int            core_id; 
     unsigned int            thread_index;
+    unsigned int            num_tx_cores;
     unsigned int            poll_period_ms;
     _Atomic  bool           *app_ready;      //written by main, read by threads, common
     _Atomic  bool           thread_ready;    //written by thread, read by main, one per thread
-    bool                    yield_sched;  //indicate if the worker thread should yield the cpu when idle
-    
+
+    //traffic gen control/status
+    unsigned int            *port_status;
+    volatile unsigned int   *port_enable;
+    volatile unsigned int   *virt_channels_per_port;
+    int                      mbuf_ts_off;
+
+
+
     //stats & control structs
     ppr_ports_t             *global_port_list;
     ppr_stats_all_t         *global_stats;
+
+    //pcap loader interface
     pcap_loader_ctl_t       *pcap_controller;
+    struct pcap_storage     *pcap_storage_t; 
+
     //mempool pointers
+    struct rte_mempool      *pcap_template_mpool;
+    struct rte_mempool      **txcore_clone_mpools;
 
     //QSBR Context
     ppr_rcu_ctx_t              *rcu_ctx;
     
     //lookup tables 
-    ppr_flow_table_t          *ip_flowtable;
-    ppr_flow_table_t          *l2_flowtable;
+    ppr_flow_table_t            *ip_flowtable;
+    ppr_flow_table_t            *l2_flowtable;
+
     //acl rules interface 
     ppr_acl_rule_db_t            *acl_rule_db;
     ppr_acl_runtime_t            *acl_runtime;

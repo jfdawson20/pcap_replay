@@ -52,50 +52,7 @@ static int return_virt_channels(json_t *root, struct pthread_args *thread_args, 
     return 0; 
 }
 
-/* return a json array of the current tx/port pcap slot assignments 
-packet transmission is controlled by assigning each tx core and port combo a specific pcap slot id. 
-pcaps are first loaded into a dynamic storage array, then users can assign a pcaps slot ID to a specific 
-tx core and port combo. 
 
-The reason for per tx core pcap slots is so pre-parsed (flow seprated) pcaps can be loaded per core, maximizing the overall 
-tx pps rate of the traffic generator. */
-static int return_slot_assign(json_t *root, struct pthread_args *thread_args, json_t *cmd_args){
-    int pcap_slot   = (int)json_integer_value(json_object_get(cmd_args, "pcap_slotid"));
-    int portno      = (int)json_integer_value(json_object_get(cmd_args, "portno"));
-    int tx_core_id  = (int)json_integer_value(json_object_get(cmd_args, "coreid"));
-    int mode        = (int)json_integer_value(json_object_get(cmd_args, "mode"));
-    
-    pcap_replay_t opmode;
-    if(mode == 1){
-        opmode = REPLAY_DIRECT;
-        printf("replay direct\n");
-    }
-    else if (mode == 2) {
-        opmode = DYN_EXPAND;
-        printf("dynamic expansions\n");
-    }
-    else{
-        printf("invalid operating mode\n");
-        json_object_set_new(root,"status",json_integer(-1)); 
-        return -1; 
-    }    
-
-    //check if pcap slotid is valid
-    if (pcap_slot >= 0 && pcap_slot < thread_args->global_state->pcap_storage_t->count){
-        
-        printf("assigning pcap_slot %d to portno %d txcore %d slot\n", pcap_slot,portno,tx_core_id);
-        thread_args->global_state->pcap_storage_t->slot_assignments[portno][tx_core_id] = pcap_slot;
-        thread_args->global_state->pcap_storage_t->slots[pcap_slot].mode = opmode;
-    }
-    else{
-        printf("pcap slot %d is out of valid range\n", pcap_slot);
-        json_object_set_new(root,"status",json_integer(-1)); 
-        return -1; 
-    }
-
-    json_object_set_new(root,"status",json_integer(0)); 
-    return 0; 
-}
 
 /* enable transmission on a specified port. if the port argument is "-1" transmission is enabled on all configured ports. 
 else the port number provided is checked to see if all required port+tx core slots have already been assigned a valid pcap id. 
@@ -151,128 +108,9 @@ static int return_port_enable(json_t *root, struct pthread_args *thread_args, js
     return 0; 
 }
 
-/* Return a json mapping of Tx Core to buffer filler core ID s */
-static int return_list_coremap(json_t *root, struct pthread_args *thread_args, json_t *cmd_args){
-    int num_tx_cores = thread_args->global_state->num_tx_cores;
-
-    for(int i=0; i<num_tx_cores;i++){
-
-        json_t *buff_arr = json_array();
-        //iterate over tx threads buffer cores 
-        for (int j =0; j < thread_args->global_state->tx_buff_core_mapping[i].total_fillers;j++){
-            json_array_append_new(buff_arr,json_integer(thread_args->global_state->tx_buff_core_mapping[i].filler_cores[j]));
-        }
-
-        char txcore[32];
-        sprintf(txcore,"tx_core_%d", thread_args->global_state->tx_buff_core_mapping[i].tx_core);
-        json_object_set_new(root,txcore,buff_arr);
-    }
-
-    return 0; 
-}
-
-
-/* Return a json list of all pcaps loaded into memory currently. Returns the following information for each active pcap storage slot
-- slot id 
-- pcap name 
-- number of mbuffs in the slot array
-- which tx core it's assigned to 
-*/
-static int return_pcap_list(json_t *root, struct pthread_args *thread_args, json_t *cmd_args){
-    
-    int num_pcaps = thread_args->global_state->pcap_storage_t->count;
-
-    json_object_set_new(root,"num_pcaps",json_integer(num_pcaps));
-    json_t *arr = json_array();
-    for(int i=0; i<num_pcaps;i++){
-        json_t *pcap_info = json_object();
-        char *pcapname  = thread_args->global_state->pcap_storage_t->slots[i].pcap_name;
-        int numpackets  = thread_args->global_state->pcap_storage_t->slots[i].numpackets;
-        uint64_t start_ns = thread_args->global_state->pcap_storage_t->slots[i].start_ns;
-        uint64_t end_ns = thread_args->global_state->pcap_storage_t->slots[i].end_ns;
-        uint64_t delta_ns = thread_args->global_state->pcap_storage_t->slots[i].delta_ns;
-        uint64_t size_bytes = thread_args->global_state->pcap_storage_t->slots[i].size_in_bytes;
-
-        json_object_set_new(pcap_info,"slotid",json_integer(i));
-        json_object_set_new(pcap_info,"pcap_name",json_string(pcapname));
-        json_object_set_new(pcap_info,"pcap_packets",json_integer(numpackets));
-        json_object_set_new(pcap_info,"first_ns",json_integer(start_ns));
-        json_object_set_new(pcap_info,"last_ns",json_integer(end_ns));
-        json_object_set_new(pcap_info,"delta_ns",json_integer(delta_ns));
-        json_object_set_new(pcap_info,"size_in_bytes",json_integer(size_bytes));
-
-        json_array_append_new(arr,pcap_info);
-
-    }
-
-    json_object_set_new(root,"loaded_pcaps",arr);
-    return 0;
-}
 
 
 
-/* Primary pcap load command handler. This function takes a filename and a assigned tx core ID 
-   from the command args json struct and uses the information to kick the pcap_loader pthread. 
-   
-   The pcap_loader pthread is started at lanch time (launched from the main DPDk thread) and
-   sits in a poll loop waiting for commands to be issued. Pcap loader command and status are 
-   relayed using a shared memory pcap control struct that is accessed via the thread args struct. 
-
-   access to the pcap loader control struct is guarded with standard pthread muxtex locks. 
-
-   after completing the load operation, the function formats a response json string into the root json 
-   pointer provided by the dispatch function (this is the return string). 
-
-   note, this function both kicks and then waits for the pcap_loader thread to complete the load operation, 
-   polling on loader complete (above function). This negates the use of a separate loader thread. I designed it this way
-   so in the future if I want the loader thread to do more work per pcap (like TSO aggregation), the logic can be changed to not 
-   block the control_server thread while loading / processing pcaps.
-
-*/
-static int return_pcap_loader(json_t *root, struct pthread_args *thread_args, json_t *cmd_args){
-    
-    //extract filename from command
-    const char *filename             = json_string_value(json_object_get(cmd_args, "filename"));
-
-    //get pcap thread lock
-    pthread_mutex_lock(&thread_args->pcap_controller->lock);
-
-    //copy filename into shared struct 
-    snprintf(thread_args->pcap_controller->filename, sizeof(thread_args->pcap_controller->filename), "%s", filename);
-
-    //signal loader thread
-    thread_args->pcap_controller->command = CMD_LOAD_PCAP;
-    pthread_cond_signal(&thread_args->pcap_controller->cond);
-    pthread_mutex_unlock(&thread_args->pcap_controller->lock);
-
-    //wait for load to complete , will change this later 
-    int pcap_error = 0;
-    unsigned int slot = 0;
-    while(check_pcap_status(thread_args,&pcap_error,&slot) == 0){
-        usleep(10*1000);
-    }
-
-    int numpackets  = thread_args->global_state->pcap_storage_t->slots[slot].numpackets;
-
-    //format result
-    json_object_set_new(root,"status",json_integer(pcap_error));
-    json_object_set_new(root,"slot",json_integer(slot));
-    json_object_set_new(root,"num_packets",json_integer(numpackets));
-
-    //print pcap storage stats 
-    int count = thread_args->global_state->pcap_storage_t->count;
-    printf("pcap stored in slot: %d\n", count);
-
-    //read all slots 
-    for (int i = 0; i < count; i++){
-        char *pcapname  = thread_args->global_state->pcap_storage_t->slots[i].pcap_name;
-        int pcap_mbufs  = thread_args->global_state->pcap_storage_t->slots[i].numpackets;
-
-        printf("Slot %d - File Loaded: %s, NumPackets: %d\n",i,pcapname,pcap_mbufs);
-    }
-
-    return 0; 
-}
 
 
 

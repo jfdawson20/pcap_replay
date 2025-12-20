@@ -61,10 +61,8 @@ static const cyaml_schema_field_t multi_tenant_settings_fields[] = {
 };
 
 static const cyaml_schema_field_t thread_settings_fields[] = {
-    CYAML_FIELD_UINT("total_cores", CYAML_FLAG_DEFAULT, ppr_thread_settings_t, total_cores),
     CYAML_FIELD_UINT("tx_cores", CYAML_FLAG_DEFAULT, ppr_thread_settings_t, tx_cores),
     CYAML_FIELD_UINT("base_lcore_id", CYAML_FLAG_DEFAULT, ppr_thread_settings_t, base_lcore_id),
-    CYAML_FIELD_UINT("limit_buf_cores", CYAML_FLAG_DEFAULT, ppr_thread_settings_t, limit_buf_cores),
     CYAML_FIELD_END
 };
 

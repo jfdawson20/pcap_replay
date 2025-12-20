@@ -1,6 +1,47 @@
+#include <unistd.h> 
+
 #include "ppr_pcap_loader_rpc.h"
+#include "ppr_app_defines.h"
 
 
+/* Return a json list of all pcaps loaded into memory currently. Returns the following information for each active pcap storage slot
+- slot id 
+- pcap name 
+- number of mbuffs in the slot array
+- which tx core it's assigned to 
+*/
+int ppr_get_loaded_pcaps_list(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args){
+    
+    (void) args; //unused parameter
+
+    int num_pcaps = thread_args->pcap_storage_t->count;
+
+    json_object_set_new(reply_root,"num_pcaps",json_integer(num_pcaps));
+    json_t *arr = json_array();
+    for(int i=0; i<num_pcaps;i++){
+        json_t *pcap_info = json_object();
+        char *pcapname  = thread_args->pcap_storage_t->slots[i].pcap_name;
+        int numpackets  = thread_args->pcap_storage_t->slots[i].numpackets;
+        uint64_t start_ns = thread_args->pcap_storage_t->slots[i].start_ns;
+        uint64_t end_ns = thread_args->pcap_storage_t->slots[i].end_ns;
+        uint64_t delta_ns = thread_args->pcap_storage_t->slots[i].delta_ns;
+        uint64_t size_bytes = thread_args->pcap_storage_t->slots[i].size_in_bytes;
+
+        json_object_set_new(pcap_info,"slotid",json_integer(i));
+        json_object_set_new(pcap_info,"pcap_name",json_string(pcapname));
+        json_object_set_new(pcap_info,"pcap_packets",json_integer(numpackets));
+        json_object_set_new(pcap_info,"first_ns",json_integer(start_ns));
+        json_object_set_new(pcap_info,"last_ns",json_integer(end_ns));
+        json_object_set_new(pcap_info,"delta_ns",json_integer(delta_ns));
+        json_object_set_new(pcap_info,"size_in_bytes",json_integer(size_bytes));
+
+        json_array_append_new(arr,pcap_info);
+
+    }
+
+    json_object_set_new(reply_root,"loaded_pcaps",arr);
+    return 0;
+}
 
 /* 
 The next two functions (check_pcap_status) and (return_pcap_loader) are responsible for taking a pcapfile path and loading it into the
@@ -10,7 +51,7 @@ Pcap Replay pcap storage memory.
 /* check for pcap loading complete - polls pcap thread control structure 
    returns 0 if busy and 1 if done. slot ID loaded and result (error) returned in pointers 
 */
-static int check_pcap_status(struct ppr_thread_args_t *thread_args, int *result, unsigned int *slot){
+static int check_pcap_status(ppr_thread_args_t *thread_args, int *result, unsigned int *slot){
     int done = 0;
     
     pthread_mutex_lock(&thread_args->pcap_controller->lock);
@@ -66,21 +107,21 @@ int ppr_load_pcap_file(json_t *reply_root, json_t *args, ppr_thread_args_t *thre
         usleep(10*1000);
     }
 
-    int numpackets  = thread_args->global_state->pcap_storage_t->slots[slot].numpackets;
+    int numpackets  = thread_args->pcap_storage_t->slots[slot].numpackets;
 
     //format result
-    json_object_set_new(root,"status",json_integer(pcap_error));
-    json_object_set_new(root,"slot",json_integer(slot));
-    json_object_set_new(root,"num_packets",json_integer(numpackets));
+    json_object_set_new(reply_root,"status",json_integer(pcap_error));
+    json_object_set_new(reply_root,"slot",json_integer(slot));
+    json_object_set_new(reply_root,"num_packets",json_integer(numpackets));
 
     //print pcap storage stats 
-    int count = thread_args->global_state->pcap_storage_t->count;
+    int count = thread_args->pcap_storage_t->count;
     printf("pcap stored in slot: %d\n", count);
 
     //read all slots 
     for (int i = 0; i < count; i++){
-        char *pcapname  = thread_args->global_state->pcap_storage_t->slots[i].pcap_name;
-        int pcap_mbufs  = thread_args->global_state->pcap_storage_t->slots[i].numpackets;
+        char *pcapname  = thread_args->pcap_storage_t->slots[i].pcap_name;
+        int pcap_mbufs  = thread_args->pcap_storage_t->slots[i].numpackets;
 
         printf("Slot %d - File Loaded: %s, NumPackets: %d\n",i,pcapname,pcap_mbufs);
     }

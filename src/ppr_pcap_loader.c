@@ -266,6 +266,30 @@ static int process_pcap(struct pthread_args *thread_args, const char *filename){
     return 0;
 }
 
+
+/** 
+* Iterate through loaded pcaps and apply ACL rules to each packet, storing policy decision in mbuf private area 
+* @param thread_args Pointer to global thread args struct
+* @param slotid Pcap storage slot ID to process
+* @return 0 on success, negative error code on failure
+**/
+int process_acl_on_loaded_pcap(struct pthread_args *thread_args, unsigned int slotid){
+
+    //get acl runtime
+    
+    //get mbuf array for slotid 
+
+    //for each mbuf 
+        // create headers struct 
+        // build L2 and L3 flow keys 
+        // classify packet with ACL 
+        // store policy decision in mbuf private area
+
+    return 0;
+}
+
+
+
 /* Main thread called by control_server thread to load and pre-process pcap files if */
 void *run_pcap_loader_thread(void *arg) {
     struct pthread_args *thread_args  = (struct pthread_args *)arg;
