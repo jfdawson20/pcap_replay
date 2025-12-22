@@ -52,70 +52,10 @@ lookups.
 #include "ppr_actions.h"
 #include "ppr_log.h"
 #include "ppr_qsbr.h"
-
+#include "ppr_flowkey.h"
 #define PPR_ACL_MAX_RULES 8192
 
 
-/* -------------------------------------------- Flow Key Structs ------------------------------------------------- */
-
-//L2 flow key for L2 (Non IP) Flow Tables
-typedef struct ppr_l2_flow_key {
-    uint32_t tenant_id;   // same concept as IP table
-
-    uint16_t in_port;     // ingress port id
-    uint16_t outer_vlan;  // 0 if absent
-    uint16_t inner_vlan;  // 0 if absent (QinQ)
-    uint16_t ether_type;  // outer or inner, depending on your design
-
-    struct rte_ether_addr src;
-    struct rte_ether_addr dst;
-
-    uint32_t hash;        // precomputed signature if you want it here too
-} ppr_l2_flow_key_t __rte_aligned(8);
-
-
-//ipv4 flow key 
-typedef struct ppr_flow_key_v4{
-    uint32_t src_ip;   // be32
-    uint32_t dst_ip;   // be32
-    uint16_t src_port; // be16
-    uint16_t dst_port; // be16
-    uint8_t  proto;    // IPPROTO_*
-    uint8_t  _pad[3];  // keep alignment (explicit)
-} ppr_flow_key_v4_t __rte_aligned(8);
-
-
-//ipv6 flow key
-typedef struct ppr_flow_key_v6{
-    uint8_t  src_ip[16]; // raw bytes (network order)
-    uint8_t  dst_ip[16]; // raw bytes (network order)
-    uint16_t src_port;   // be16
-    uint16_t dst_port;   // be16 
-    uint8_t  proto;      // IPPROTO_*
-    uint8_t  _pad[1];    // keep alignment
-} ppr_flow_key_v6_t __rte_aligned(8);
-
-
-// Unify v4/v6: we store family + union
-// Family is AF_INET / AF_INET6 
-typedef struct ppr_flow_key{
-    uint32_t tenant_id;  
-    uint8_t  family;     
-    uint8_t  _pad0[3];
-
-    union {
-        ppr_flow_key_v4_t v4;
-        ppr_flow_key_v6_t v6;
-    } ip;
-
-    uint32_t hash; 
-    uint32_t _pad1;
-} ppr_flow_key_t __rte_aligned(8);
-
-//calculate max key size 
-#define PPR_FT_MAX_KEY_SIZE \
-    (sizeof(ppr_flow_key_t) > sizeof(ppr_l2_flow_key_t) ? \
-        sizeof(ppr_flow_key_t) : sizeof(ppr_l2_flow_key_t))
 
 
 /* -------------------------- PPR ACL API Public Struct Definitions ----------------*/
