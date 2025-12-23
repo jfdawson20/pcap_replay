@@ -722,6 +722,8 @@ int main(int argc, char **argv) {
     control_server_thread_args->acl_runtime = &ppr_acl_runtime_ctx;
     control_server_thread_args->acl_rule_db = &ppr_acl_rules_db;
 
+    control_server_thread_args->controller_port = ppr_app_cfg->app_settings.controller_port;
+
     //launch stats thread and pin to core 0
     if (pthread_create(&control_server_thread, NULL, run_ppr_app_server_thread, control_server_thread_args) != 0){
         rte_exit(EXIT_FAILURE, "control server thread creation failed\n");
