@@ -131,6 +131,20 @@ const ppr_cmd_def_t ppr_cmd_table[] = {
         .args_schema = "{port: str(port_name), slotid: int(slot_id), pace_mode: int(pace_mode), start_mode: int(start_mode), fixed_index: int(fixed_index), replay_window_sec: int(replay_window_sec)}",
         .handler     = ppr_assign_port_slot,
     },
+
+    /* --------------------------------- Port Commands ----------------------------------- */
+    {
+        .name        = "ppr_cmd_get_port_list",
+        .description = "List all ports configured in the application",
+        .args_schema = "{}",
+        .handler     = ppr_cmd_get_port_list,
+    },
+    {
+        .name        = "ppr_port_tx_ctl",
+        .description = "Enable or disable transmission on a specified port",
+        .args_schema = "{port: str(port_name), cmd: str('enable'|'disable')}",
+        .handler     = ppr_port_tx_ctl,
+    },
     
 
 
