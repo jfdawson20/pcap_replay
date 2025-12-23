@@ -611,7 +611,7 @@ int main(int argc, char **argv) {
 
     //traffic gen control / status 
     stats_thread_args->tx_worker_ctx           = NULL;              //Not Used
-    stats_thread_args->port_stream_global_cfg  = NULL;              //Not Used
+    stats_thread_args->port_stream_global_cfg  = port_stream_global_cfg;              
     stats_thread_args->mbuf_ts_off             = mbuf_time_offset;           
 
     //stats & control interfaces
@@ -664,7 +664,7 @@ int main(int argc, char **argv) {
 
     //traffic gen control / status 
     pload_thread_args->tx_worker_ctx           = NULL;              //Not Used
-    pload_thread_args->port_stream_global_cfg  = NULL;              //Not Used
+    pload_thread_args->port_stream_global_cfg  = port_stream_global_cfg;            
     pload_thread_args->mbuf_ts_off             = mbuf_time_offset;           
 
     //pload & control interfaces
@@ -715,7 +715,7 @@ int main(int argc, char **argv) {
     control_server_thread_args->app_ready        = &app_ready;
     //traffic gen control / status 
     control_server_thread_args->tx_worker_ctx           = NULL;              //Not Used
-    control_server_thread_args->port_stream_global_cfg  = NULL;              //Not Used
+    control_server_thread_args->port_stream_global_cfg  = port_stream_global_cfg;        
     control_server_thread_args->mbuf_ts_off             = mbuf_time_offset;           
 
     //pload & control interfaces
