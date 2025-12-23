@@ -708,8 +708,8 @@ int main(int argc, char **argv) {
     control_server_thread_args->global_stats     = NULL;        //to be implemented
 
     //pcap loader / storage interfaces
-    control_server_thread_args->pcap_controller  = NULL;         //Not Used
-    control_server_thread_args->pcap_storage     = NULL;         //Not Used
+    control_server_thread_args->pcap_controller  = pcap_loader_ctl;      
+    control_server_thread_args->pcap_storage     = global_pcap_storage;         
 
     //mempool pointers 
     control_server_thread_args->pcap_template_mpool = pcap_mempool; 
