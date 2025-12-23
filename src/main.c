@@ -657,8 +657,8 @@ int main(int argc, char **argv) {
     pload_thread_args->global_stats     = NULL;        //to be implemented
 
     //pcap loader / storage interfaces
-    pload_thread_args->pcap_controller  = NULL;         //Not Used
-    pload_thread_args->pcap_storage     = NULL;         //Not Used
+    pload_thread_args->pcap_controller  = pcap_loader_ctl;         //Not Used
+    pload_thread_args->pcap_storage     = global_pcap_storage;         //Not Used
 
     //mempool pointers 
     pload_thread_args->pcap_template_mpool = pcap_mempool; 
