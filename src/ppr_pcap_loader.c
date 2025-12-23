@@ -220,6 +220,18 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
     struct rte_mempool *mp = thread_args->pcap_template_mpool;
     struct pcap_storage *st = thread_args->pcap_storage;
 
+    /* Parse yaml file */
+    char *pcap_filepath_out=NULL;
+    rc = ppr_acl_load_startup_file(filename,acl_db,global_port_list,&pcap_filepath_out);
+    if (rc < 0) {
+        fprintf(stderr, "Failed to parse ACL YAML file %s: rc=%d\n", filename, rc);
+        return rc;
+    }
+    if (pcap_filepath_out == NULL || *pcap_filepath_out == '\0') {
+        fprintf(stderr, "No pcap template filepath found in ACL YAML file %s\n", filename);
+        return -EINVAL;
+    }
+
     /* Allocate slot id up front (monotonic). */
     unsigned int slotid = 0;
     int s_rc = pcap_storage_alloc_slotid(st, &slotid);
@@ -233,25 +245,11 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
     if (!mbuff_array) return -ENOMEM;
     mbuf_array_init(mbuff_array);
 
-    /* Parse yaml file */
-    char **pcap_filepath_out=NULL;
-    rc = ppr_acl_load_startup_file(filename,acl_db,global_port_list,pcap_filepath_out);
-    if (rc < 0) {
-        fprintf(stderr, "Failed to parse ACL YAML file %s: rc=%d\n", filename, rc);
-        rte_free(mbuff_array);
-        return rc;
-    }
-    if (pcap_filepath_out == NULL || *pcap_filepath_out == '\0') {
-        fprintf(stderr, "No pcap template filepath found in ACL YAML file %s\n", filename);
-        rte_free(mbuff_array);
-        return -EINVAL;
-    }
-
     /* Open PCAP */
     char errbuf[PCAP_ERRBUF_SIZE] = {0};
-    pcap_t *pc = pcap_open_offline_with_tstamp_precision(*pcap_filepath_out, PCAP_TSTAMP_PRECISION_NANO, errbuf);
+    pcap_t *pc = pcap_open_offline_with_tstamp_precision(pcap_filepath_out, PCAP_TSTAMP_PRECISION_NANO, errbuf);
     if (!pc) {
-        pc = pcap_open_offline(*pcap_filepath_out, errbuf);
+        pc = pcap_open_offline(pcap_filepath_out, errbuf);
         if (!pc) {
             fprintf(stderr, "pcap open failed: %s\n", errbuf);
             rte_free(mbuff_array);
