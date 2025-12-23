@@ -232,6 +232,14 @@ int main(int argc, char **argv) {
         }
     }   
 
+    if (pcap_mempool == NULL) {
+        rte_exit(EXIT_FAILURE, "global_pcap_mempool was not created (check config mempool name)\n");
+    }
+    for (unsigned i = 0; i < tx_cores; i++) {
+        if (copy_mempools[i] == NULL) {
+            rte_exit(EXIT_FAILURE, "copy_mempools[%u] was not created\n", i);
+        }
+    }
 
     /* -------------------------- Configure ports --------------------------------------------------------------- */
     PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
