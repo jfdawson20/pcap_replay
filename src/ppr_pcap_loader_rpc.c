@@ -213,6 +213,7 @@ int ppr_assign_port_slot(json_t *reply_root, json_t *args, ppr_thread_args_t *th
     //extract port number from command
     json_t *jportname = json_object_get(args, "port");
     if (!jportname) {
+        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: missing 'port' argument in ppr_assign_port_slot\n");
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
         return -EINVAL;
     }
@@ -222,6 +223,7 @@ int ppr_assign_port_slot(json_t *reply_root, json_t *args, ppr_thread_args_t *th
     //validate port entry exists
     ppr_port_entry_t *port_entry = ppr_find_port_byname(port_list, portname);
     if (!port_entry) {
+        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: could not find port entry for port name '%s'\n", portname);
         json_object_set_new(reply_root, "status", json_integer(-ENOENT));
         return -ENOENT;
     }
@@ -229,6 +231,7 @@ int ppr_assign_port_slot(json_t *reply_root, json_t *args, ppr_thread_args_t *th
     //extract slot id from command
     json_t *jslotid = json_object_get(args, "slotid");
     if (!jslotid) {
+        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: missing 'slotid' argument in ppr_assign_port_slot\n");
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
         return -EINVAL;
     }
@@ -237,6 +240,8 @@ int ppr_assign_port_slot(json_t *reply_root, json_t *args, ppr_thread_args_t *th
     //validate slot exists
     uint32_t max_published_slots = atomic_load_explicit(&st->published_count, memory_order_acquire);
     if ((uint32_t)slotid >= max_published_slots) {
+        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: requested slotid %d is out of range (max published slots %u)\n",
+                slotid, max_published_slots);
         json_object_set_new(reply_root, "status", json_integer(-ENOENT));
         return -ENOENT;
     }
@@ -244,6 +249,7 @@ int ppr_assign_port_slot(json_t *reply_root, json_t *args, ppr_thread_args_t *th
     //get pointer to slot entry 
     pcap_mbuff_slot_t *slot_entry = atomic_load_explicit(&st->slots[slotid], memory_order_acquire);
     if (slot_entry == NULL) {
+        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: requested slotid %d is not loaded\n", slotid);
         json_object_set_new(reply_root, "status", json_integer(-ENOENT));
         return -ENOENT;
     }
