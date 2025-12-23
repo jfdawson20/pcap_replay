@@ -6,4 +6,4 @@ acl_rules:
     - src: "192.168.1.100"
       priority: 100
       action:
-        default_policy: FLOW_ACT_NOOP   # or DROP
+        default_policy: FLOW_ACT_MODIFY_SRCIP  
