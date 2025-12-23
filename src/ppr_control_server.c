@@ -39,6 +39,7 @@ ppr_server is the primary control interface for the PPR application, allowing ex
 #include "ppr_stats_rpc.h"
 #include "ppr_port_rpc.h"
 #include "ppr_acl_rpc.h"
+#include "ppr_pcap_loader_rpc.h"
 
 /* API function Defs */
 //general commands
@@ -111,8 +112,28 @@ const ppr_cmd_def_t ppr_cmd_table[] = {
         .args_schema = "{}",
         .handler     = ppr_cmd_acl_db_commit,
     },
-    /* --------------------------------- Flowtable Commands ----------------------------------- */
+    /* --------------------------------- Pcap Loader Commands ----------------------------------- */
+    {
+        .name        = "ppr_get_loaded_pcaps_list",
+        .description = "list loaded pcap files in memory",
+        .args_schema = "{}",
+        .handler     = ppr_get_loaded_pcaps_list,
+    },
+    {
+        .name        = "ppr_load_pcap_file",
+        .description = "Load a pcap file into memory",
+        .args_schema = "{filename: str(pcap_file_name)}",
+        .handler     = ppr_load_pcap_file,
+    },
+    {
+        .name        = "ppr_assign_port_slot",
+        .description = "Assign a loaded pcap slot to a port for replay",
+        .args_schema = "{port: str(port_name), slotid: int(slot_id), pace_mode: int(pace_mode), start_mode: int(start_mode), fixed_index: int(fixed_index), replay_window_sec: int(replay_window_sec)}",
+        .handler     = ppr_assign_port_slot,
+    },
     
+
+
 };
 
 const size_t ppr_cmd_table_count = sizeof(ppr_cmd_table) /
