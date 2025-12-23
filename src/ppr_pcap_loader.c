@@ -314,6 +314,8 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
     //store the selected action index
     priv->acl_policy_index = selected_action->idx;
 
+    priv->pending_policy_action.valid = true;
+
     //set the correct L3 type field for later use
     if(is_l2_action)
         priv->acl_policy_type = PPR_L3_NONE;
