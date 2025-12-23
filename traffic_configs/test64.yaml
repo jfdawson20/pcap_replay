@@ -1,0 +1,9 @@
+template:
+  pcap_filepath: "pcaps/test64.pcap"
+
+acl_rules:
+  ip4:
+    - src: "192.168.1.100"
+      priority: 100
+      action:
+        default_policy: FLOW_ACT_NOOP   # or DROP

@@ -74,12 +74,18 @@ typedef struct {
 } ppr_yaml_acl_rules_t;
 
 typedef struct {
+    char *pcap_filepath;   // "/path/to/file.pcap"
+} ppr_yaml_template_t;
+
+typedef struct {
+    ppr_yaml_template_t  template;
     ppr_yaml_acl_rules_t rules;
 } ppr_yaml_acl_root_t;
 
 /* Main entrypoint: parse file, add rules into db. */
 int ppr_acl_load_startup_file(const char *path,
                               ppr_acl_rule_db_t *db,
-                              ppr_ports_t *global_port_list);
+                              ppr_ports_t *global_port_list,
+                              char **pcap_template_out);
 
 #endif /* PPR_ACL_YAML_H */

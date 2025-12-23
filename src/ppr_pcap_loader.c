@@ -41,6 +41,7 @@ Description:
 #include "ppr_app_defines.h"
 #include "ppr_mbuf_fields.h"
 #include "ppr_control.h"
+#include "ppr_acl_yaml.h"
 
 
 /* ------------------------------- dynamic mbuf array functions -------------------------- */
@@ -199,7 +200,15 @@ static uint64_t ts_to_ns(const struct pcap_pkthdr *h, int prec) {
  * - Publishes slot pointer atomically when complete
  */
 static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
-    if (!thread_args || !filename) return -EINVAL;
+    if (!thread_args || !filename) 
+        return -EINVAL;
+
+    ppr_acl_rule_db_t *acl_db = thread_args->acl_rule_db;
+    ppr_ports_t *global_port_list = thread_args->global_port_list;
+
+    if(!acl_db || !global_port_list){
+        return -EINVAL;
+    }
 
     const uint8_t *data = NULL;
     struct pcap_pkthdr *hdr = NULL;
@@ -224,14 +233,29 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
     if (!mbuff_array) return -ENOMEM;
     mbuf_array_init(mbuff_array);
 
+    /* Parse yaml file */
+    char **pcap_filepath_out=NULL;
+    rc = ppr_acl_load_startup_file(filename,acl_db,global_port_list,pcap_filepath_out);
+    if (rc < 0) {
+        fprintf(stderr, "Failed to parse ACL YAML file %s: rc=%d\n", filename, rc);
+        rte_free(mbuff_array);
+        return rc;
+    }
+    if (pcap_filepath_out == NULL || *pcap_filepath_out == '\0') {
+        fprintf(stderr, "No pcap template filepath found in ACL YAML file %s\n", filename);
+        rte_free(mbuff_array);
+        return -EINVAL;
+    }
+
     /* Open PCAP */
     char errbuf[PCAP_ERRBUF_SIZE] = {0};
-    pcap_t *pc = pcap_open_offline_with_tstamp_precision(filename, PCAP_TSTAMP_PRECISION_NANO, errbuf);
+    pcap_t *pc = pcap_open_offline_with_tstamp_precision(*pcap_filepath_out, PCAP_TSTAMP_PRECISION_NANO, errbuf);
     if (!pc) {
-        pc = pcap_open_offline(filename, errbuf);
+        pc = pcap_open_offline(*pcap_filepath_out, errbuf);
         if (!pc) {
             fprintf(stderr, "pcap open failed: %s\n", errbuf);
             rte_free(mbuff_array);
+            free(pcap_filepath_out);
             return -EINVAL;
         }
     }
@@ -244,6 +268,7 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
         pcap_close(pc);
         mbuf_array_free(mbuff_array);
         rte_free(mbuff_array);
+        free(pcap_filepath_out);
         return -ENOTSUP;
     }
 
@@ -264,6 +289,7 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
 
         struct rte_mbuf *m = rte_pktmbuf_alloc(mp);
         if (unlikely(m->buf_addr == NULL)) {
+            free(pcap_filepath_out);
             return -EINVAL;
         }
 
@@ -277,6 +303,7 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
             pcap_close(pc);
             mbuf_array_free(mbuff_array);
             rte_free(mbuff_array);
+            free(pcap_filepath_out);
             return -ENOMEM;
         }
 
@@ -290,6 +317,7 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
     if (!slot) {
         mbuf_array_free(mbuff_array);
         rte_free(mbuff_array);
+        free(pcap_filepath_out);
         return -ENOMEM;
     }
 
@@ -309,21 +337,10 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
 
     /* Update controller visible latest slot id */
     thread_args->pcap_controller->latest_slotid = slotid;
-
+    free(pcap_filepath_out);
     return 0;
 }
 
-/**
- * Iterate through loaded pcaps and apply ACL rules to each packet, storing policy decision in mbuf private area
- * NOTE: You can safely run this only on slots that are already published and immutable in shape.
- * If you plan to mutate per-packet metadata arrays, prefer allocating meta arrays once and writing them
- * before publishing, OR gate ACL processing to STOPPED state.
- */
-static int process_acl_on_loaded_pcap(ppr_thread_args_t *thread_args, unsigned int slotid) {
-    (void)thread_args;
-    (void)slotid;
-    return 0;
-}
 
 /* Main loader thread */
 void *run_pcap_loader_thread(void *arg) {

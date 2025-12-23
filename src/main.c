@@ -378,7 +378,8 @@ int main(int argc, char **argv) {
         int rc = ppr_acl_load_startup_file(
             ppr_app_cfg->acl_table_settings.startup_cfg_file,
             &ppr_acl_rules_db,
-            global_port_list);
+            global_port_list,
+            NULL);
         if (rc < 0) {
             rte_exit(EXIT_FAILURE, "Failed to load ACL startup rules file %s\n",
                 ppr_app_cfg->acl_table_settings.startup_cfg_file);

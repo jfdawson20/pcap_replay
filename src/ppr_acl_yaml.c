@@ -188,10 +188,24 @@ static const cyaml_schema_field_t ppr_yaml_acl_rules_fields[] = {
     CYAML_FIELD_END
 };
 
-/* root: has a single "acl_rules" mapping */
+static const cyaml_schema_field_t ppr_yaml_template_fields[] = {
+    CYAML_FIELD_STRING_PTR(
+        "pcap_filepath", CYAML_FLAG_POINTER ,
+        ppr_yaml_template_t, pcap_filepath,
+        0, CYAML_UNLIMITED),
+
+    CYAML_FIELD_END
+};
+
+
 static const cyaml_schema_field_t ppr_yaml_acl_root_fields[] = {
     CYAML_FIELD_MAPPING(
-        "acl_rules", CYAML_FLAG_DEFAULT,
+        "template", CYAML_FLAG_DEFAULT | CYAML_FLAG_OPTIONAL,
+        ppr_yaml_acl_root_t, template,
+        ppr_yaml_template_fields),
+
+    CYAML_FIELD_MAPPING(
+        "acl_rules", CYAML_FLAG_DEFAULT | CYAML_FLAG_OPTIONAL,
         ppr_yaml_acl_root_t, rules,
         ppr_yaml_acl_rules_fields),
 
@@ -399,8 +413,8 @@ static int parse_tenant_range(const char *s, uint32_t *lo_out, uint32_t *hi_out)
             return -EINVAL;
         if (lo > hi)
             return -EINVAL;   /* or swap if you prefer being forgiving */
-        *lo_out = (uint16_t)lo;
-        *hi_out = (uint16_t)hi;
+        *lo_out = (uint32_t)lo;
+        *hi_out = (uint32_t)hi;
         return 0;
     }
 
@@ -412,8 +426,8 @@ static int parse_tenant_range(const char *s, uint32_t *lo_out, uint32_t *hi_out)
             return -EINVAL;
         if (lo > hi)
             return -EINVAL;   /* or swap if you prefer being forgiving */
-        *lo_out = (uint16_t)lo;
-        *hi_out = (uint16_t)hi;
+        *lo_out = (uint32_t)lo;
+        *hi_out = (uint32_t)hi;
         return 0;        
     }
 
@@ -421,8 +435,8 @@ static int parse_tenant_range(const char *s, uint32_t *lo_out, uint32_t *hi_out)
     if (sscanf(s, "%u", &lo) != 1 || lo > 4294967294)
         return -EINVAL;
 
-    *lo_out = (uint16_t)lo;
-    *hi_out = (uint16_t)lo;
+    *lo_out = (uint32_t)lo;
+    *hi_out = (uint32_t)lo;
     return 0;
 }
 
@@ -736,7 +750,9 @@ static int yaml_l2_to_cfg(const ppr_yaml_acl_l2_rule_t *y,
 
 int ppr_acl_load_startup_file(const char *path,
                               ppr_acl_rule_db_t *db,
-                              ppr_ports_t *global_port_list)
+                              ppr_ports_t *global_port_list,
+                              char **pcap_template_out)
+
 {
     if (!path || !*path)
         return 0; // nothing to do
@@ -825,6 +841,14 @@ int ppr_acl_load_startup_file(const char *path,
             root->rules.ip6_count,
             root->rules.l2_count,
             path);
+
+    //return  pcap template filepath if requested
+    char *pcap_copy = NULL;
+    if (pcap_template_out && root->template.pcap_filepath) {
+        pcap_copy = strdup(root->template.pcap_filepath);
+        if (!pcap_copy) { rc = -ENOMEM; goto out; }
+        *pcap_template_out = pcap_copy;
+    }
 
 out:
     cyaml_free(&cyaml_cfg, &ppr_yaml_acl_root_schema, root, 0);
