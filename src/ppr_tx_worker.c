@@ -127,8 +127,10 @@ static inline void clear_rss_hash(struct rte_mbuf *m)
 /* Return true if caller should drop/free */
 static bool ppr_modify_mbuf(struct rte_mbuf *m, const ppr_vc_ctx_t *vc)
 {
-    if (unlikely(m == NULL || vc == NULL))
+    if (unlikely(m == NULL || vc == NULL)){
+        PPR_LOG(PPR_LOG_DP, RTE_LOG_ERR, "ppr_modify_mbuf: invalid null pointer\n");
         return true;
+    }
 
     ppr_priv_t *priv = ppr_priv(m);
 
