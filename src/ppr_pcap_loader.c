@@ -158,11 +158,11 @@ static inline int append_bytes_to_mbuf(struct rte_mbuf **pmbuf,
 
     while (off < len) {
         struct rte_mbuf *last = rte_pktmbuf_lastseg(m);
+        uint32_t tail = rte_pktmbuf_tailroom(last);
 
-        if (rte_pktmbuf_tailroom(last) == 0) {
+        if (tail == 0) {
             struct rte_mbuf *seg = rte_pktmbuf_alloc(mp);
             if (!seg) return -ENOMEM;
-
             rte_pktmbuf_reset(seg);
 
             if (rte_pktmbuf_chain(m, seg) != 0) {
@@ -172,12 +172,9 @@ static inline int append_bytes_to_mbuf(struct rte_mbuf **pmbuf,
             continue;
         }
 
-        uint32_t to_copy = len - off;
+        uint32_t to_copy = (len - off < tail) ? (len - off) : tail;
         uint8_t *dst = rte_pktmbuf_append(m, to_copy);
-        if (!dst) {
-            /* not enough tailroom in last seg; allocate another seg */
-            continue;
-        }
+        if (!dst) return -ENOSPC;
 
         rte_memcpy(dst, src + off, to_copy);
         off += to_copy;
@@ -185,6 +182,7 @@ static inline int append_bytes_to_mbuf(struct rte_mbuf **pmbuf,
 
     return 0;
 }
+
 
 static uint64_t ts_to_ns(const struct pcap_pkthdr *h, int prec) {
     uint64_t sec_ns = (uint64_t)h->ts.tv_sec * 1000000000ull;
@@ -265,13 +263,14 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
         total_bytes += caplen;
 
         struct rte_mbuf *m = rte_pktmbuf_alloc(mp);
-        if (!m) {
-            fprintf(stderr, "mbuf alloc failed (rte_errno=%d)\n", rte_errno);
-            pcap_close(pc);
-            mbuf_array_free(mbuff_array);
-            rte_free(mbuff_array);
-            return -ENOMEM;
+        if (unlikely(m->buf_addr == NULL)) {
+            fprintf(stderr,
+                "BUG: mbuf buf_addr NULL. mp=%s data_room? m=%p buf_len=%u data_off=%u\n",
+                mp ? mp->name : "(null)",
+                m, m->buf_len, m->data_off);
+            return -EINVAL;
         }
+
 
         rte_pktmbuf_reset(m);
 

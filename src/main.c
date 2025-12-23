@@ -210,6 +210,7 @@ int main(int argc, char **argv) {
 
             PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "Created global pcap mempool %s with %u entries\n",
                 mpool_cfg->name, mpool_cfg->mpool_entries);
+
         }
         //else create per tx core copy pools 
         else if (strcmp(mpool_cfg->name, "copy_mempools") == 0){
@@ -240,6 +241,12 @@ int main(int argc, char **argv) {
             rte_exit(EXIT_FAILURE, "copy_mempools[%u] was not created\n", i);
         }
     }
+
+    printf("pcap_mempool=%s elt_size=%u header=%u trailer=%u\n",
+       pcap_mempool->name,
+       pcap_mempool->elt_size,
+       pcap_mempool->header_size,
+       pcap_mempool->trailer_size);
 
     /* -------------------------- Configure ports --------------------------------------------------------------- */
     PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
