@@ -303,7 +303,7 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
     }
     else{
         //no hits
-        PPR_DP_LOG(PPR_LOG_DP, RTE_LOG_DEBUG,
+        PPR_DP_LOG(PPR_LOG_DP, RTE_LOG_INFO,
                 "No ACL match found\n");
         return;
     }
@@ -466,7 +466,6 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
         rc = ppr_l2_flowkey_from_hdr(&hdrs, &l2_flow_key, slotid);
         if (rc == 0){
             l2_flowkey_valid = true;
-                //WPS_LOG(WPS_LOG_DP, RTE_LOG_INFO, "port value in l2 flowkey: %d\n", l2_flow_key.in_port);
         }
 
         bool ip_flowkey_valid = false;
