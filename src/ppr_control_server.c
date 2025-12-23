@@ -450,7 +450,7 @@ void *run_ppr_app_server_thread(void *arg) {
             
             //reset buffers 
             memset(buf,0,sizeof(buf));
-            memset(command,0,sizeof(command));
+            //memset(command,0,sizeof(command));
 
         }
         close(cli_fd);

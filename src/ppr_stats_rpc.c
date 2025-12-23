@@ -17,6 +17,7 @@
 int ppr_cmd_mem_stats(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args){
     pthread_mutex_lock(&(thread_args->global_stats->mem_stats->lock));
     //silence unused param warnings
+    (void)reply_root;
     (void)args;
     (void)thread_args;
 

@@ -320,7 +320,7 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
  * If you plan to mutate per-packet metadata arrays, prefer allocating meta arrays once and writing them
  * before publishing, OR gate ACL processing to STOPPED state.
  */
-int process_acl_on_loaded_pcap(struct pthread_args *thread_args, unsigned int slotid) {
+static int process_acl_on_loaded_pcap(ppr_thread_args_t *thread_args, unsigned int slotid) {
     (void)thread_args;
     (void)slotid;
     return 0;

@@ -18,5 +18,6 @@
 #include "ppr_log.h"
 
 int ppr_cmd_get_port_list(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args);
+int ppr_port_tx_ctl(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args);
 
 #endif // PPR_PORT_RPC_H

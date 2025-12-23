@@ -55,7 +55,6 @@ static int update_memstats(ppr_thread_args_t *thread_args){
 static int update_portstats(ppr_thread_args_t *thread_args){
     ppr_ports_t *global_port_list = thread_args->global_port_list;
 
-    int rc =0;
     for (unsigned int i =0; i < global_port_list->num_ports; i++){
         if(!global_port_list->ports[i].name){
             PPR_LOG(PPR_LOG_STATS, RTE_LOG_ERR, "Port name is NULL for port index %u\n", i);
@@ -190,8 +189,6 @@ static int ppr_update_worker_stats(ppr_thread_args_t *thread_args){
 void *run_ppr_stats_thread(void *arg) {
     //parse thread args 
     ppr_thread_args_t *thread_args  = (ppr_thread_args_t *)arg;   
-    ppr_ports_t *global_port_list = thread_args->global_port_list;
-    int rc = 0; 
 
     //setup poll rate variables
     const uint64_t hz = rte_get_timer_hz();

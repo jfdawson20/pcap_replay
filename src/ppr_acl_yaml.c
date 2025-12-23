@@ -9,15 +9,6 @@
 
 /* -------- libcyaml schema -------- */
 
-/* Reusable schema for a heap-allocated string (char *). */
-static const cyaml_schema_value_t ppr_yaml_string_ptr_value = {
-    CYAML_VALUE_STRING(
-        CYAML_FLAG_POINTER,   /* heap-allocated C string */
-        char,                 /* NOTE: char, not char *  */
-        0,
-        CYAML_UNLIMITED)
-};
-
 /* Action mapping: ppr_yaml_acl_action_t */
 static const cyaml_schema_field_t ppr_yaml_acl_action_fields[] = {
     CYAML_FIELD_STRING_PTR(
@@ -447,6 +438,8 @@ static int yaml_action_to_policy(const ppr_yaml_acl_action_t *ya,
                                  ppr_ports_t *global_port_list,
                                  ppr_policy_action_t *out)
 {
+    (void)global_port_list;
+
     memset(out, 0, sizeof(*out));
 
     //set default policy action from string in yaml, defaults to drop policy if not present or invalid

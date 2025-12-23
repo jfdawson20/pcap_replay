@@ -125,7 +125,7 @@ static inline void clear_rss_hash(struct rte_mbuf *m)
 }
 
 /* Return true if caller should drop/free */
-bool ppr_modify_mbuf(struct rte_mbuf *m, const ppr_vc_ctx_t *vc)
+static bool ppr_modify_mbuf(struct rte_mbuf *m, const ppr_vc_ctx_t *vc)
 {
     if (unlikely(m == NULL || vc == NULL))
         return true;

@@ -237,7 +237,9 @@ static int parse_tenant_range(const char *s, uint32_t *lo_out, uint32_t *hi_out)
 
 
 static json_t *ppr_policy_action_to_json(ppr_ports_t *global_port_list, const ppr_policy_action_t *action)
-{
+{   
+    (void) global_port_list;
+
     if (!action)
         return NULL;
 
@@ -255,6 +257,9 @@ static json_t *ppr_policy_action_to_json(ppr_ports_t *global_port_list, const pp
 
 static int ppr_acl_action_from_json(const json_t *obj, ppr_ports_t *global_port_list,ppr_policy_action_t *out)
 {
+
+    (void) global_port_list;
+    
     if (!obj || !json_is_object(obj) || !out)
         return -EINVAL;
 
