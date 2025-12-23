@@ -145,7 +145,15 @@ const ppr_cmd_def_t ppr_cmd_table[] = {
         .args_schema = "{port: str(port_name), cmd: str('enable'|'disable')}",
         .handler     = ppr_port_tx_ctl,
     },
+    {
+        .name        = "ppr_set_port_stream_vcs",
+        .description = "Set the number of active VCs (clients) for a given port stream",
+        .args_schema = "{port: str(port_name), num_vcs: int(number_of_active_vcs)}",
+        .handler     = ppr_set_port_stream_vcs,
+    },
 };
+
+
 
 const size_t ppr_cmd_table_count = sizeof(ppr_cmd_table) /
                                    sizeof(ppr_cmd_table[0]);

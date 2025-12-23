@@ -900,3 +900,65 @@ int ppr_port_stats_free(ppr_port_entry_t *port_entry){
     return 0;
 }   
 
+/** 
+* Set the number of active VCs (clients) for a given port stream.
+* @param reply_root
+*   Pointer to the json reply root object.
+* @param args
+*   Pointer to the json args object.
+* @param thread_args
+*   Pointer to the thread args structure.
+* @param result
+*   Pointer to integer to store result code (0=success, negative=error).    
+**/
+int ppr_set_port_stream_vcs(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args)
+{
+    if (!reply_root || !args || !thread_args || !thread_args->global_port_list) {
+        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: invalid arguments to ppr_set_port_stream_vcs\n");
+        json_object_set_new(reply_root, "status", json_integer(-EINVAL));
+        return -EINVAL;
+    }
+
+    ppr_ports_t *port_list = thread_args->global_port_list;
+
+    //extract port number from command
+    json_t *jportname = json_object_get(args, "port");
+    if (!jportname) {
+        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: missing 'port' argument in ppr_set_port_stream_vcs\n");
+        json_object_set_new(reply_root, "status", json_integer(-EINVAL));
+        return -EINVAL;
+    }
+    const char *portname = json_string_value (jportname);
+
+    //validate port entry exists
+    ppr_port_entry_t *port_entry = ppr_find_port_byname(port_list, portname);
+    if (!port_entry) {
+        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: could not find port entry for port name '%s'\n", portname);
+        json_object_set_new(reply_root, "status", json_integer(-ENOENT));
+        return -ENOENT;
+    }
+
+    //extract number of VCs from command
+    json_t *jnum_vcs = json_object_get(args, "num_vcs");
+    if (!jnum_vcs) {
+        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: missing 'num_vcs' argument in ppr_set_port_stream_vcs\n");
+        json_object_set_new(reply_root, "status", json_integer(-EINVAL));
+        return -EINVAL;
+    }
+    uint32_t num_vcs = (uint32_t)json_integer_value(jnum_vcs);
+
+    //set the number of active VCs for the port stream
+    uint16_t global_port_index = port_entry->global_port_index;
+    ppr_port_stream_global_t *port_streams = thread_args->port_stream_global_cfg;
+    if(port_streams == NULL){
+        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: port stream global config is NULL in ppr_set_port_stream_vcs\n");
+        json_object_set_new(reply_root, "status", json_integer(-EINVAL));
+        return -EINVAL;
+    }
+
+    atomic_store_explicit(&port_streams[global_port_index].active_clients, num_vcs, memory_order_release);
+
+    json_object_set_new(reply_root, "status", json_integer(0));
+    return 0;
+
+}

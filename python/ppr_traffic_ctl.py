@@ -34,6 +34,9 @@ CMD_ASSIGN_PORT_SLOT = "ppr_assign_port_slot"
 CMD_GET_PORT_LIST = "ppr_cmd_get_port_list"
 CMD_PORT_TX_CTL = "ppr_port_tx_ctl"
 
+CMD_SET_PORT_STREAM_VCS = "ppr_set_port_stream_vcs"
+
+
 
 # ---------------------------------------------------------------------------
 # Optional enums / helpers
@@ -140,6 +143,13 @@ class PprTrafficClient:
         if cmd_l not in ("enable", "disable"):
             raise ValueError("cmd must be 'enable' or 'disable'")
         return self.ctl.call(CMD_PORT_TX_CTL, args={"port": port, "cmd": cmd_l})
+
+    def set_port_stream_vcs(self, port: str, num_vcs: int) -> Dict[str, Any]:
+        payload = {
+            "port": port,
+            "num_vcs": int(num_vcs),
+        }
+        return self.ctl.call(CMD_SET_PORT_STREAM_VCS, args=payload)
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +422,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="replay_window_sec (float). 0 typically means 'no window' if supported.",
     )
 
+    # ---- vcs ----
+    p_vcs = sp.add_parser("vcs", help="Set number of active virtual clients (VCs) for a port stream")
+    p_vcs.add_argument("--portname", required=True, help="Port name")
+    p_vcs.add_argument("--num-vcs", required=True, type=int, help="Number of active VCs (clients)")
+
+
     return p
 
 
@@ -461,6 +477,12 @@ def main() -> int:
             )
             display_generic_reply("Assign Port Slot Reply", reply)
             return 0
+
+        if args.command == "vcs":
+            reply = traffic.set_port_stream_vcs(args.portname, args.num_vcs)
+            display_generic_reply("Set Port Stream VCs Reply", reply)
+            return 0
+
 
         raise RuntimeError(f"Unknown command: {args.command}")
 
