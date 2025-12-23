@@ -42,6 +42,10 @@ Description:
 #include "ppr_mbuf_fields.h"
 #include "ppr_control.h"
 #include "ppr_acl_yaml.h"
+#include "ppr_log.h"
+#include "ppr_acl.h"
+#include "ppr_flowkey.h"
+#include "ppr_header_extract.h"
 
 
 /* ------------------------------- dynamic mbuf array functions -------------------------- */
@@ -193,6 +197,135 @@ static uint64_t ts_to_ns(const struct pcap_pkthdr *h, int prec) {
     return sec_ns + sub;
 }
 
+/** 
+* Process ACL lookups for a given mbuf and populate the mbuf private area with the resulting action.    
+* @param acl_runtime_ctx
+*   Pointer to ACL runtime context structure.
+* @param acl_db
+*   Pointer to ACL rule database structure.
+* @param m
+*   Pointer to mbuf to process.
+* @param hdrs
+*   Pointer to parsed headers structure.
+* @param ip_flowkey_valid
+*   Boolean indicating if the IP flow key is valid.
+* @param ip_flow_key
+*   Pointer to IP flow key structure.
+* @param l2_flowkey_valid
+*   Boolean indicating if the L2 flow key is valid.
+* @param l2_flow_key
+*   Pointer to L2 flow key structure.
+**/
+static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
+                                      ppr_acl_rule_db_t *acl_db,
+                                      struct rte_mbuf *m,
+                                      ppr_hdrs_t *hdrs,
+                                      bool ip_flowkey_valid,
+                                      const ppr_flow_key_t *ip_flow_key,
+                                      bool l2_flowkey_valid,
+                                      const ppr_l2_flow_key_t *l2_flow_key)
+{
+
+    (void)acl_db; //unused for now
+
+    ppr_policy_action_t ip_acl_action = {0};
+    ppr_policy_action_t l2_acl_action = {0};
+
+    ppr_priv_t *priv = ppr_priv(m);
+    int rc = 0;
+
+    if (!acl_runtime_ctx || !hdrs) {
+        PPR_LOG(PPR_LOG_DP, RTE_LOG_ERR, "Null argument passed to process_acl_lookup\n");
+        return;
+    }
+
+
+    //perform ACL lookups into both tables if we have valid flow keys
+    //lookup l2 action if we have a valid l2 flow key
+    if(l2_flow_key && l2_flowkey_valid){
+        rc = ppr_acl_classify_l2(acl_runtime_ctx,
+                                 l2_flow_key,
+                                 &l2_acl_action);
+
+        if (rc < 0) {
+            PPR_LOG(PPR_LOG_DP, RTE_LOG_ERR,"ACL L2 lookup failed with error %d\n", rc);
+            return;
+        }
+    }
+
+    //now L3 lookup if we have a valid ip flow key
+    if(ip_flow_key && ip_flowkey_valid){
+        rc = ppr_acl_classify_ip(acl_runtime_ctx,
+                                 ip_flow_key,
+                                 m->port,
+                                 &ip_acl_action);
+
+        if (rc < 0) {
+            PPR_LOG(PPR_LOG_DP, RTE_LOG_ERR,"ACL lookup failed with error %d\n", rc);
+            return;
+        }
+    }
+
+    //if we only have one valid policy, apply that, else go by priority
+    ppr_policy_action_t *selected_action = NULL;
+    bool is_l2_action = false;
+    if(l2_acl_action.hit && !ip_acl_action.hit){
+        PPR_DP_LOG(PPR_LOG_DP, RTE_LOG_INFO,
+                "L2 ACL matched: applying action\n");
+
+        selected_action = &l2_acl_action;
+        is_l2_action = true;
+
+    }
+    else if (ip_acl_action.hit && !l2_acl_action.hit){
+        PPR_DP_LOG(PPR_LOG_DP, RTE_LOG_INFO,
+                "IP ACL matched: applying action\n");
+
+        selected_action = &ip_acl_action;
+        is_l2_action = false;
+    }
+    else if (l2_acl_action.hit && ip_acl_action.hit){
+        //both hit, choose by priority
+        if (l2_acl_action.priority >= ip_acl_action.priority){
+            PPR_DP_LOG(PPR_LOG_DP, RTE_LOG_INFO,
+                    "Both L2 and IP ACL matched: applying L2 action due to higher priority\n");
+
+            selected_action = &l2_acl_action;
+            is_l2_action = true;
+        }
+        else{
+            PPR_DP_LOG(PPR_LOG_DP, RTE_LOG_INFO,
+                    "Both L2 and IP ACL matched: applying IP action due to higher priority\n");
+
+            selected_action = &ip_acl_action;
+            is_l2_action = false;
+        }
+    }
+    else{
+        //no hits
+        PPR_DP_LOG(PPR_LOG_DP, RTE_LOG_DEBUG,
+                "No ACL match found\n");
+        return;
+    }
+
+
+    //now that we've resolved our policy action, apply it to the priv area
+    priv->pending_policy_action = *selected_action;
+
+    //store the selected action index
+    priv->acl_policy_index = selected_action->idx;
+
+    //set the correct L3 type field for later use
+    if(is_l2_action)
+        priv->acl_policy_type = PPR_L3_NONE;
+    else
+    priv->acl_policy_type = hdrs->l3_type;
+
+    return;
+
+}
+
+
 /*
  * Build a new slot privately and publish it.
  * - Allocates mbuf_array and slot struct
@@ -232,6 +365,20 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
         return -EINVAL;
     }
 
+    /* Open PCAP */
+    char errbuf[PCAP_ERRBUF_SIZE] = {0};
+    pcap_t *pc = pcap_open_offline_with_tstamp_precision(pcap_filepath_out, PCAP_TSTAMP_PRECISION_NANO, errbuf);
+    if (!pc) {
+        pc = pcap_open_offline(pcap_filepath_out, errbuf);
+        if (!pc) {
+            fprintf(stderr, "pcap open failed: %s\n", errbuf);
+            free(pcap_filepath_out);
+            return -EINVAL;
+        }
+    }
+    int prec = pcap_get_tstamp_precision(pc);
+
+
     /* Allocate slot id up front (monotonic). */
     unsigned int slotid = 0;
     int s_rc = pcap_storage_alloc_slotid(st, &slotid);
@@ -245,20 +392,6 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
     if (!mbuff_array) return -ENOMEM;
     mbuf_array_init(mbuff_array);
 
-    /* Open PCAP */
-    char errbuf[PCAP_ERRBUF_SIZE] = {0};
-    pcap_t *pc = pcap_open_offline_with_tstamp_precision(pcap_filepath_out, PCAP_TSTAMP_PRECISION_NANO, errbuf);
-    if (!pc) {
-        pc = pcap_open_offline(pcap_filepath_out, errbuf);
-        if (!pc) {
-            fprintf(stderr, "pcap open failed: %s\n", errbuf);
-            rte_free(mbuff_array);
-            free(pcap_filepath_out);
-            return -EINVAL;
-        }
-    }
-    int prec = pcap_get_tstamp_precision(pc);
-
     /* Enforce Ethernet */
     int dlt = pcap_datalink(pc);
     if (dlt != DLT_EN10MB) {
@@ -268,6 +401,12 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
         rte_free(mbuff_array);
         free(pcap_filepath_out);
         return -ENOTSUP;
+    }
+
+    //commit acl rules to runtime before processing pcap
+    rc = ppr_acl_db_commit(thread_args->acl_runtime, thread_args->acl_rule_db);
+    if (rc != 0){
+        rte_exit(EXIT_FAILURE, "Failed to commit loaded ACL rules to runtime\n");
     }
 
     bool have_first = false;
@@ -291,9 +430,10 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
             return -EINVAL;
         }
 
-
+        //reset so we have a clean priv area
         rte_pktmbuf_reset(m);
 
+        //set the timestamp 
         my_ts_set(m, thread_args->mbuf_ts_off, ns - first_ns);
 
         if (append_bytes_to_mbuf(&m, mp, data, caplen) != 0) {
@@ -304,6 +444,48 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
             free(pcap_filepath_out);
             return -ENOMEM;
         }
+
+        
+        //parse header structure from packet
+        ppr_hdrs_t hdrs; 
+        rc = ppr_parse_headers(m, &hdrs);
+        if (rc < 0) {
+            PPR_LOG(PPR_LOG_DP, RTE_LOG_ERR, "Failed to parse headers for ACL lookup\n");
+            rte_pktmbuf_free(m);
+            pcap_close(pc);
+            mbuf_array_free(mbuff_array);
+            rte_free(mbuff_array);
+            free(pcap_filepath_out);
+            return rc;
+        }
+
+        //build flow keys 
+        bool l2_flowkey_valid = false;
+        ppr_l2_flow_key_t l2_flow_key = {0};
+    
+        rc = ppr_l2_flowkey_from_hdr(&hdrs, &l2_flow_key, slotid);
+        if (rc == 0){
+            l2_flowkey_valid = true;
+                //WPS_LOG(WPS_LOG_DP, RTE_LOG_INFO, "port value in l2 flowkey: %d\n", l2_flow_key.in_port);
+        }
+        bool ip_flowkey_valid = false;
+        ppr_flow_key_t ip_flow_key = {0};
+        rc = ppr_flowkey_from_hdr( &hdrs, &ip_flow_key, slotid);
+        if(rc == 0){
+            ip_flowkey_valid = true;
+        }
+
+
+        //process acl lookup and populate mbuf priv area
+        process_acl_lookup(thread_args->acl_runtime,
+                           acl_db,
+                           m,
+                           &hdrs,
+                           ip_flowkey_valid,
+                           &ip_flow_key,
+                           l2_flowkey_valid,
+                           &l2_flow_key);
+       
 
         mbuf_array_push(mbuff_array, m);
     }
@@ -338,7 +520,6 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
     free(pcap_filepath_out);
     return 0;
 }
-
 
 /* Main loader thread */
 void *run_pcap_loader_thread(void *arg) {

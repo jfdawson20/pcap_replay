@@ -4,6 +4,7 @@
 #include <rte_mbuf.h>
 
 #include "ppr_actions.h"
+#include "ppr_header_extract.h"
 
 
 void init_mbuf_tstamps(int *offset);  // declaration only
@@ -27,6 +28,8 @@ typedef struct ppr_priv{
     
     //pending action to apply to this packet
     ppr_policy_action_t pending_policy_action;
+    uint32_t acl_policy_index;
+    ppr_l3_t acl_policy_type;
 } ppr_priv_t __rte_cache_aligned;
 
 
