@@ -237,15 +237,66 @@ def display_ports(reply: Dict[str, Any]) -> None:
 
 
 
+from typing import Any, Dict
+from prettytable import PrettyTable
+
+
+def _as_list(v):
+    if v is None:
+        return []
+    if isinstance(v, list):
+        return v
+    return [v]
+
+
+def _fmt_bytes(n):
+    try:
+        n = int(n)
+    except Exception:
+        return n
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024:
+            return f"{n:.1f}{unit}"
+        n /= 1024
+    return f"{n:.1f}PB"
+
+
+def _fmt_ns(ns):
+    try:
+        ns = int(ns)
+    except Exception:
+        return ns
+    return f"{ns / 1e9:.6f}s"
+
+
 def display_loaded_pcaps(reply: Dict[str, Any]) -> None:
     """
-    Render loaded pcaps list. Common shapes:
-      - {"slots":[ {...}, ... ]}
-      - {"pcaps":[ {...}, ... ]}
-      - {"loaded":[ {...}, ... ]}
+    Render loaded pcaps list.
+
+    Expected (current):
+      {
+        "status": "success",
+        "num_pcaps": N,
+        "loaded_pcaps": [
+          {
+            "slotid": 0,
+            "pcap_name": "...",
+            "pcap_packets": 123,
+            "first_ns": ...,
+            "last_ns": ...,
+            "delta_ns": ...,
+            "size_in_bytes": ...,
+            "mode": 0
+          }
+        ]
+      }
+
+    Backwards-compatible with older shapes.
     """
+
     slots = (
-        reply.get("slots")
+        reply.get("loaded_pcaps")
+        or reply.get("slots")
         or reply.get("pcaps")
         or reply.get("loaded")
         or reply.get("results")
@@ -254,25 +305,46 @@ def display_loaded_pcaps(reply: Dict[str, Any]) -> None:
     slots = _as_list(slots)
 
     t = PrettyTable()
-    t.field_names = ["Slot ID", "Filename", "Packets", "Bytes", "Loaded", "Notes"]
+    t.field_names = [
+        "Slot",
+        "PCAP",
+        "Packets",
+        "Size",
+        "Δ Time",
+        "First TS",
+        "Last TS",
+        "Mode",
+    ]
 
     for s in slots:
         if not isinstance(s, dict):
-            t.add_row(["", str(s), "", "", "", ""])
+            t.add_row(["", str(s), "", "", "", "", "", ""])
             continue
 
-        slotid = s.get("slotid", s.get("slot_id", s.get("id", "")))
-        filename = s.get("filename", s.get("file", s.get("path", "")))
-        packets = s.get("packets", s.get("pkt_count", s.get("num_pkts", "")))
-        bytes_ = s.get("bytes", s.get("byte_count", s.get("num_bytes", "")))
-        loaded = s.get("loaded", s.get("is_loaded", ""))
-        notes = s.get("notes", "")
+        slotid   = s.get("slotid", s.get("slot_id", s.get("id", "")))
+        name     = s.get("pcap_name", s.get("filename", s.get("file", "")))
+        packets  = s.get("pcap_packets", s.get("packets", ""))
+        size_b   = s.get("size_in_bytes", s.get("bytes", ""))
+        delta_ns = s.get("delta_ns", "")
+        first_ns = s.get("first_ns", "")
+        last_ns  = s.get("last_ns", "")
+        mode     = s.get("mode", "")
 
-        t.add_row([slotid, filename, packets, bytes_, loaded, notes])
+        t.add_row([
+            slotid,
+            name,
+            packets,
+            _fmt_bytes(size_b),
+            _fmt_ns(delta_ns),
+            _fmt_ns(first_ns),
+            _fmt_ns(last_ns),
+            mode,
+        ])
 
     print("Loaded PCAPs:")
     print(t)
     print("")
+
 
 
 def display_generic_reply(title: str, reply: Dict[str, Any]) -> None:
