@@ -558,7 +558,7 @@ int main(int argc, char **argv) {
 
         //QSBR Context
         tx_thread_args_array[core_idx]->rcu_ctx          = NULL;       //not used for tx worker
-`
+
         //acl rules interface 
         tx_thread_args_array[core_idx]->acl_runtime = &ppr_acl_runtime_ctx;
         tx_thread_args_array[core_idx]->acl_rule_db = &ppr_acl_rules_db;
