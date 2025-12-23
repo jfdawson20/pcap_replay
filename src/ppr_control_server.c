@@ -145,9 +145,6 @@ const ppr_cmd_def_t ppr_cmd_table[] = {
         .args_schema = "{port: str(port_name), cmd: str('enable'|'disable')}",
         .handler     = ppr_port_tx_ctl,
     },
-    
-
-
 };
 
 const size_t ppr_cmd_table_count = sizeof(ppr_cmd_table) /
