@@ -287,8 +287,7 @@ lower_bound_rel_ns(const pcap_mbuff_slot_t *slot, uint32_t n,
     return lo;
 }
 
-static inline void
-wpr_vc_init_start_params(wpr_vc_ctx_t *vc,
+static inline void wpr_vc_init_start_params(wpr_vc_ctx_t *vc,
                          const wpr_port_stream_global_t *gcfg,
                          const pcap_mbuff_slot_t *slot,
                          int mbuf_ts_off,
@@ -299,6 +298,7 @@ wpr_vc_init_start_params(wpr_vc_ctx_t *vc,
                          uint32_t vc_count)
 {
     const uint32_t n = (uint32_t)slot->numpackets;
+
     vc->epoch = 0;
     vc->flow_epoch = 0;
 
@@ -323,49 +323,67 @@ wpr_vc_init_start_params(wpr_vc_ctx_t *vc,
     uint32_t start_idx = 0;
     uint64_t start_offset_ns = 0;
 
+    /* ---------------- paced (pcap timestamps) ---------------- */
     if (gcfg->pace_mode == VC_PACE_PCAP_TS && gcfg->replay_window_ns > 0) {
         const uint64_t window = gcfg->replay_window_ns;
 
-        uint64_t phase = (vc_count ? (window * (uint64_t)vc_local_idx) / (uint64_t)vc_count : 0);
-        uint64_t jitter_max = window / 100;
+        /*
+         * To guarantee "full pcap fits in the window" for each VC, we must
+         * restrict the offset to [0, window - pcap_span].
+         */
+        uint64_t first = wpr_slot_pkt_rel_ns(slot, 0, mbuf_ts_off);
+        uint64_t last  = wpr_slot_pkt_rel_ns(slot, n - 1, mbuf_ts_off);
+        if (first == UINT64_MAX) first = 0;
+        if (last  == UINT64_MAX) last  = first;
+
+        uint64_t span = (last >= first) ? (last - first) : 0;
+
+        /* If span >= window, no offset can fit the whole capture; clamp to 0. */
+        uint64_t max_off = (window > span) ? (window - span) : 0;
+
+        /*
+         * Evenly distribute offsets across [0, max_off] with small jitter.
+         * NOTE: if max_off == 0, all VCs necessarily align at offset 0.
+         */
+        uint64_t phase = (vc_count ? (max_off * (uint64_t)vc_local_idx) / (uint64_t)vc_count : 0);
+
+        uint64_t jitter_max = (max_off / 100);          /* 1% of allowed offset range */
         uint64_t jitter = (jitter_max ? (r % jitter_max) : 0);
-        start_offset_ns = (phase + jitter) % window;
 
-        /* start_idx comes from start_mode, NOT from start_offset_ns */
-        if (gcfg->start_mode == VC_START_RANDOM_INDEX) {
-            start_idx = (uint32_t)(r % n);
-        } else {
-            start_idx = base_idx;   /* usually 0 */
-        }
+        start_offset_ns = (max_off ? ((phase + jitter) % (max_off + 1)) : 0);
 
-        uint64_t rel0 = wpr_slot_pkt_rel_ns(slot, start_idx, mbuf_ts_off);
-        if (rel0 == UINT64_MAX) rel0 = 0;
+        /*
+         * IMPORTANT: for paced replay + randomized offset, keep start_idx at the
+         * start of the capture so every VC replays the full pcap timeline and
+         * the offset alone determines placement in the window.
+         */
+        start_idx = 0;
 
         vc->start_idx = start_idx;
         vc->pcap_idx = start_idx;
         vc->start_offset_ns = start_offset_ns;
-        vc->base_rel_ns = rel0;
+        vc->base_rel_ns = first;   /* base relative time = first packet ts */
+
         return;
     }
 
-    else {
-        /*
-         * Unpaced: spread by packet index.
-         * - RANDOM_INDEX: pseudo-random
-         * - FIXED_INDEX: base + spacing
-         */
-        if (gcfg->start_mode == VC_START_RANDOM_INDEX) {
-            start_idx = (uint32_t)(r % n);
-        } else {
-            uint32_t stride = (vc_count ? (n / vc_count) : n);
-            if (stride == 0) stride = 1;
+    /* ---------------- unpaced ---------------- */
+    /*
+     * Unpaced: spread by packet index.
+     * - RANDOM_INDEX: pseudo-random
+     * - FIXED_INDEX: base + spacing
+     */
+    if (gcfg->start_mode == VC_START_RANDOM_INDEX) {
+        start_idx = (uint32_t)(r % n);
+    } else {
+        uint32_t stride = (vc_count ? (n / vc_count) : n);
+        if (stride == 0) stride = 1;
 
-            start_idx = (base_idx + vc_local_idx * stride) % n;
-            if (stride > 1) start_idx = (start_idx + (uint32_t)(r % stride)) % n;
-        }
-
-        start_offset_ns = 0;
+        start_idx = (base_idx + vc_local_idx * stride) % n;
+        if (stride > 1) start_idx = (start_idx + (uint32_t)(r % stride)) % n;
     }
+
+    start_offset_ns = 0;
 
     vc->start_idx = start_idx;
     vc->pcap_idx = start_idx;
@@ -379,6 +397,7 @@ wpr_vc_init_start_params(wpr_vc_ctx_t *vc,
     if (rel0 == UINT64_MAX) rel0 = 0;
     vc->base_rel_ns = rel0;
 }
+
 
 /** 
 * Pick a uint32_t in the inclusive range [lo, hi] using the provided random value
