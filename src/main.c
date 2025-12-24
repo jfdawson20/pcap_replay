@@ -3,7 +3,10 @@ SPDX-License-Identifier: MIT
 Copyright (c) 2025 jfdawson20
 
 Filename: main.c 
-Description: 
+Description: The PPR application is a DPDK based pcap replay tool designed for high performance traffic generation from pcap files. Its built around the concept of dynamic 
+traffic expansion via virtual clients, where a single pcap flow can be expanded into multiple flows by modifying packet headers on the fly. The main.c file contains the 
+primary entry point for the DPDK application, handling initialization of DPDK EAL, loading configuration files, launching worker threads 
+(control server, stats monitor, pcap loader, tx workers, buffer workers), and managing application shutdown.
 */
 
 #define _GNU_SOURCE
@@ -87,8 +90,6 @@ int main(int argc, char **argv) {
 
     //start init, note we use PPR_LOG macro defined in ppr_log.h for all logging, this allows for different log levels and per module logging control
     PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\nPcap Replay Application Starting\n\n");
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
-        "\n############################### Initializing DPDK EAL ###############################\n\n");
 
     /* Install signal handlers for clean shutdown */
     struct sigaction sa;
@@ -105,7 +106,9 @@ int main(int argc, char **argv) {
     }
 
 
-    /* -------------------------- Init DPDK EAL ----------------------------------------------------------------- */
+    /* ------------------------------------------------------ Init DPDK EAL ----------------------------------------------------------------- */
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+        "\n############################### Initializing DPDK EAL ###############################\n\n");
     //for any DPDK app, first thing we do is initialize the EAL (Environment Abstraction Layer) which sets up hugepages, memory, PMD's etc. 
     int ret = rte_eal_init(argc, argv);
     if (ret < 0) {
@@ -123,11 +126,12 @@ int main(int argc, char **argv) {
     argc -=ret;
     argv += ret;
 
-    /* -------------------------- Load config yaml file  --------------------------------------------------------- */
+    /* ------------------------------------------------------ Load config yaml file  --------------------------------------------------------- */
     //load application config from yaml file specified on command line, yaml parsing is done using libcymal library
     //libcyaml config schema is defined in ppr_config.c and ppr_config.h 
     PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### Loading Application Configuration ###############################\n\n");
+
     //get config file path from eal arguments 
     const char *config_file = NULL;
     for (int i = 1; i < argc; i++) {
@@ -153,7 +157,7 @@ int main(int argc, char **argv) {
     unsigned int tx_cores      = ppr_app_cfg->thread_settings.tx_cores;
     unsigned int base_lcore_id = ppr_app_cfg->thread_settings.base_lcore_id;
 
-    /* ------------------------- Configure DPDK RCU QSBR Struct ---------------------------------------------------*/
+    /* ------------------------------------------------------ Configure DPDK RCU QSBR Struct ---------------------------------------------------*/
     //multiple subsystems in ppr use RCU QSBR for safe memory reclamation of deferred objects (e.g. retired flow actions, load balancer nodes, etc.)
     //here we create the main RCU QSBR structure that will be shared with these subsystems. The RCU QSBR structure must know how many reader threads will be using it, so
     //we pass in the number of worker threads from config file. Note, the flow table manager thread is not a reader, so not included in this count.
@@ -182,10 +186,11 @@ int main(int argc, char **argv) {
         rcu_ctx->qs = NULL;
         return rc;
     }
-
     rcu_ctx->num_readers = tx_cores;
 
-    /* -------------------------- Initialize Mempools ---------------------------------------------------------------- */
+    /* ------------------------------------------------------ Initialize Mempools ---------------------------------------------------------------- */
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+        "\n############################### Initializing Mempools ###############################\n\n"); 
     size_t priv_sz = RTE_ALIGN_CEIL(sizeof(ppr_priv_t), RTE_CACHE_LINE_SIZE);
     
     struct rte_mempool *pcap_mempool = NULL;
@@ -233,22 +238,7 @@ int main(int argc, char **argv) {
         }
     }   
 
-    if (pcap_mempool == NULL) {
-        rte_exit(EXIT_FAILURE, "global_pcap_mempool was not created (check config mempool name)\n");
-    }
-    for (unsigned i = 0; i < tx_cores; i++) {
-        if (copy_mempools[i] == NULL) {
-            rte_exit(EXIT_FAILURE, "copy_mempools[%u] was not created\n", i);
-        }
-    }
-
-    printf("pcap_mempool=%s elt_size=%u header=%u trailer=%u\n",
-       pcap_mempool->name,
-       pcap_mempool->elt_size,
-       pcap_mempool->header_size,
-       pcap_mempool->trailer_size);
-
-    /* -------------------------- Configure ports --------------------------------------------------------------- */
+    /* ------------------------------------------------------ Configure ports --------------------------------------------------------------- */
     PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### Initializing Network Ports ###############################\n\n");
     
@@ -326,7 +316,9 @@ int main(int argc, char **argv) {
 
     }
 
-    /* -------------------------- Initialize Global Policy Epochs ------------------------------------------------------- */
+    ppr_portlist_print(global_port_list);
+
+    /* ------------------------------------------------------ Initialize Global Policy Epochs ------------------------------------------------------- */
     //the PPR application is based around dynamic policy tables (egress table, ACL table etc) that can be updated at runtime.
     //the policy tables are cached in per worker core flow tables for performance. To ensure that worker cores always have the latest policy info,
     //we use an epoch based system. Each global policy table has an associated epoch counter that is incremented each time the table is updated.
@@ -355,7 +347,7 @@ int main(int argc, char **argv) {
 
 
 
-    /* -------------------------- Initialize ACL Table ---------------------------------------------------------- */
+    /* ------------------------------------------------------ Initialize ACL Table ---------------------------------------------------------- */
     PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### Initializing ACL Table ###############################\n");
     
@@ -391,11 +383,9 @@ int main(int argc, char **argv) {
         rte_exit(EXIT_FAILURE, "Failed to commit loaded ACL rules to runtime\n");
     }
 
-    /* -------------------------- Global Stats Init ----------------------------------------------- */
-
-
-
-    /* -------------------------- Pcap Loader Init ----------------------------------------------- */
+    /* ------------------------------------------------------ Pcap Loader Init ----------------------------------------------- */
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+        "\n############################### Initializing Pcap Loader ###############################\n\n");
     pcap_storage_t *global_pcap_storage = rte_zmalloc_socket("global_pcap_storage",
                                         sizeof(pcap_storage_t),
                                         RTE_CACHE_LINE_SIZE,
@@ -413,8 +403,9 @@ int main(int argc, char **argv) {
     }
 
 
-    /* -------------------------- Build Tx Worker Contexts -----------------------------------------------*/
-
+    /* ------------------------------------------------------ Build Tx Worker Contexts -----------------------------------------------*/
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+        "\n############################### Initializing TX Worker Contexts ###############################\n\n");
     //create an array to hold all tx worker contexts
     ppr_tx_worker_ctx_t **tx_worker_ctx_array = rte_zmalloc_socket("tx_worker_ctx_array",
                                                 sizeof(ppr_tx_worker_ctx_t *) * tx_cores,
@@ -527,8 +518,9 @@ int main(int argc, char **argv) {
 
     }
 
-    /* -------------------------- Build and Launch Threads -----------------------------------------------*/
-    
+    /* ------------------------------------------------------ Build and Launch Threads -----------------------------------------------*/
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+        "\n############################### Launching Worker Threads ###############################\n\n");
     /* Worker Tx Threads */
     ppr_thread_args_t **tx_thread_args_array = rte_zmalloc_socket("tx_thread_args_array",
                                                 sizeof(ppr_thread_args_t *) * tx_cores,
@@ -594,6 +586,8 @@ int main(int argc, char **argv) {
 
 
     /* Stats pthread */
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+        "\n############################### Launching Stats Manager Thread ###############################\n\n");
     ppr_thread_args_t *stats_thread_args = rte_zmalloc_socket("stats_thread_args",
                                         sizeof(ppr_thread_args_t),
                                         RTE_CACHE_LINE_SIZE,
@@ -647,6 +641,9 @@ int main(int argc, char **argv) {
 
 
     /* Pcap Loader pthread */
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+        "\n############################### Launching Pcap Loader Thread ###############################\n\n");
+
     ppr_thread_args_t *pload_thread_args = rte_zmalloc_socket("pload_thread_args",
                                         sizeof(ppr_thread_args_t),
                                         RTE_CACHE_LINE_SIZE,
@@ -699,6 +696,9 @@ int main(int argc, char **argv) {
 
 
     /* Control Server pthread */
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+        "\n############################### Launching Control Server Thread ###############################\n\n");
+
     ppr_thread_args_t *control_server_thread_args = rte_zmalloc_socket("control_server_thread_args",
                                         sizeof(ppr_thread_args_t),
                                         RTE_CACHE_LINE_SIZE,
@@ -749,8 +749,9 @@ int main(int argc, char **argv) {
     }
 
     PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\t Control Server thread launched on core %d\n", main_lcore_id);
+
     
-    /* -------------------------- Wait for all threads to initialize ------------------- */
+    /* ------------------------------------------------------ Wait for all threads to initialize ------------------------------------------------------- */
     //now that we've launched all threads, we don't want to start accepting packets until everyone is ready. First we poll for each thread 
     //to signal they've reached their init complete state. Then main singles back to all threads that they are clear to start running. 
 
@@ -794,8 +795,80 @@ int main(int argc, char **argv) {
     //local threads
     atomic_store_explicit(&app_ready, true, memory_order_relaxed);
 
+    //bring up all configured external links 
+    for (unsigned int i=0; i < global_port_list->num_ports; i++){
+        ppr_port_entry_t *port_entry = &global_port_list->ports[i];
+        
+        //if the port is external, bring it up now 
+        if(port_entry->is_external == true ){
+            ppr_rc = ppr_port_set_link_state(port_entry, true);
+            if (ppr_rc != 0){
+                PPR_LOG(PPR_LOG_INIT, RTE_LOG_WARNING, "Failed to bring up link for port %s\n",port_entry->name);
+            } else {
+                PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "Brought up link for port %s\n",port_entry->name);
+            }
+        }
+    }
+
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+        "\n############################### All threads initialized, starting processing ###############################\n\n");
+
     //wait and clean up
+    pthread_join(stats_thread, NULL);
+    pthread_join(pcap_loader_thread, NULL);
+    pthread_join(control_server_thread, NULL);
     rte_eal_mp_wait_lcore();
+
+    uint16_t shutdown_port_id;
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+        "\n############################### PPR Application Exiting ###############################\n");
+
+    
+    
+    RTE_ETH_FOREACH_DEV(shutdown_port_id) {
+        PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "Stopping port %u\n", shutdown_port_id);
+        rte_eth_dev_stop(shutdown_port_id);
+    }
+
+    RTE_ETH_FOREACH_DEV(shutdown_port_id) {
+        PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "Closing port %u\n", shutdown_port_id);
+        rte_eth_dev_close(shutdown_port_id);
+    }
+    
+    //clean up and exit 
+    rte_free(control_server_thread_args);
+    rte_free(pload_thread_args);
+    rte_free(stats_thread_args);
+
+    for (unsigned int i=0; i < tx_cores; i++){
+        rte_free(tx_thread_args_array[i]);
+        rte_free(tx_worker_ctx_array[i]->port_stream[0].clients); //all port streams share same clients ptr
+        rte_free(tx_worker_ctx_array[i]);
+    }   
+    rte_free(tx_thread_args_array);
+    rte_free(port_stream_global_cfg);
+    rte_free(global_pcap_storage);
+    rte_free(pcap_loader_ctl);
+    ppr_acl_runtime_deinit(&ppr_acl_runtime_ctx);
+    rte_free(global_policy_epochs);
+    ppr_port_list_free(global_port_list);
+    
+    rte_mempool_free(pcap_mempool);
+    for (unsigned int i=0; i < tx_cores; i++){
+        rte_mempool_free(copy_mempools[i]);
+    }
+    rte_free(copy_mempools);
+    if (rcu_ctx) {
+        if (rcu_ctx->qs)
+            rte_free(rcu_ctx->qs);
+        rte_free(rcu_ctx);
+    }
+
+    //cyaml 
+    cyaml_free(&cyaml_cfg, &ppr_config_schema, (cyaml_data_t *)ppr_app_cfg, 0);
+
+    //eal cleanup 
+    rte_eal_cleanup();
 
     printf("Application exiting cleanly");
     return 0;

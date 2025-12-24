@@ -716,6 +716,41 @@ int ppr_port_init(ppr_port_entry_t *port_entry, uint16_t port, struct rte_mempoo
         return 0;
 }
 
+/** 
+* Set the administrative link state of a DPDK Ethernet port.
+* @param port_entry
+*   Port entry to configure.
+* @param admin_up
+*   If true, bring the link up; if false, bring the link down.
+* @return
+*   0 on success, negative errno on failure.
+**/
+int ppr_port_set_link_state(ppr_port_entry_t *port_entry, bool admin_up)
+{
+    int rc;
+
+    if(port_entry->is_external == false){
+        PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR, "Cannot set link state on internal port %s\n", port_entry->name);
+        return -EINVAL;
+    }
+
+    uint16_t port_id = port_entry->port_id;
+
+    if (admin_up) {
+        rc = rte_eth_dev_set_link_up(port_id);
+        if (rc < 0)
+            return rc;  /* -ENODEV, etc. */
+
+    } else {
+        rc = rte_eth_dev_set_link_down(port_id);
+        if (rc < 0)
+            return rc;  /* -ENODEV, etc. */
+    }
+
+    port_entry->admin_state = admin_up;
+    return 0;
+}
+
 /* --------------------------------------- Port Stats Handlers -------------------------------------------*/
 
 /**

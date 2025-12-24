@@ -200,7 +200,7 @@ static const cyaml_schema_field_t ppr_yaml_template_fields[] = {
 
 static const cyaml_schema_field_t ppr_yaml_acl_root_fields[] = {
     CYAML_FIELD_MAPPING(
-        "template", CYAML_FLAG_DEFAULT | CYAML_FLAG_OPTIONAL,
+        "template", CYAML_FLAG_DEFAULT,
         ppr_yaml_acl_root_t, template,
         ppr_yaml_template_fields),
 

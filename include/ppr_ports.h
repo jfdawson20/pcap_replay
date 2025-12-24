@@ -204,5 +204,6 @@ int ppr_port_config_queues(uint16_t portid, uint16_t rx_rings, uint16_t tx_rings
 int ppr_port_stats_init(ppr_port_entry_t *port_entry);
 int ppr_port_stats_free(ppr_port_entry_t *port_entry);
 
+int ppr_port_set_link_state(ppr_port_entry_t *port_entry, bool admin_up);
 
 #endif
