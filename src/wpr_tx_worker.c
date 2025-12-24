@@ -447,33 +447,31 @@ int run_tx_worker(__rte_unused void *arg) {
                 count = MAX_VC_PER_WORKER;
             }
 
-            /* If slice changed, remap local slots to the new global IDs */
-            if (port_stream_ctx->last_start_gid != start_gid || port_stream_ctx->last_count != count) {
+            bool slice_changed = (port_stream_ctx->last_start_gid != start_gid) ||
+                                (port_stream_ctx->last_count != count);
 
+            if (slice_changed) {
                 for (uint32_t i = 0; i < count; i++) {
                     uint32_t gid = start_gid + i;
                     wpr_vc_ctx_t *vc = &port_stream_ctx->clients[i];
 
+                    /* Always materialize identity if gid differs */
                     if (vc->global_client_id != gid) {
                         vc_materialize_identity(vc, &g->idp, port_idx, gid);
-
-                        vc->epoch = 0;
-                        vc->flow_epoch = 0;
-                        pcap_mbuff_slot_t *slot = atomic_load_explicit(&thread_args->pcap_storage->slots[slot_id], memory_order_acquire);
-                        if(slot == NULL) {
-                            WPR_LOG(WPR_LOG_DP, RTE_LOG_ERR, "Invalid pcap slot %u for port index %u\n", slot_id, port_idx);
-                            continue;
-                        }
-                        wpr_vc_init_start_params(vc,
-                                                g,
-                                                slot,
-                                                port_idx,
-                                                slot_id,
-                                                gid,
-                                                /* vc_local_idx */ i,
-                                                /* vc_count */ count,
-                                                mbuf_ts_off);
                     }
+
+                    /* ALWAYS recompute start params when slice/count changes */
+                    pcap_mbuff_slot_t *slot = atomic_load_explicit(&thread_args->pcap_storage->slots[slot_id],
+                                                                memory_order_acquire);
+                    if (!slot) continue;
+
+                    wpr_vc_init_start_params(vc, g, slot, mbuf_ts_off,
+                                            port_idx, slot_id, gid,
+                                            /* vc_local_idx */ i,
+                                            /* vc_count */ count);
+
+                    vc->epoch = 0;
+                    vc->flow_epoch = 0;
                 }
 
                 port_stream_ctx->rr_next_client = 0;
