@@ -563,8 +563,17 @@ void *run_pcap_loader_thread(void *arg) {
     }
 
     while (!force_quit) {
+
         while (ctl->command == CMD_NONE) {
-            pthread_cond_wait(&ctl->cond, &ctl->lock);
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_nsec += 200 * 1000 * 1000;  // 200 ms
+
+            if (ts.tv_nsec >= 1000000000) {
+                ts.tv_sec++;
+                ts.tv_nsec -= 1000000000;
+            }
+            pthread_cond_timedwait(&ctl->cond, &ctl->lock, &ts);
         }
 
         if (ctl->command == CMD_EXIT) {
