@@ -573,7 +573,12 @@ void *run_pcap_loader_thread(void *arg) {
                 ts.tv_sec++;
                 ts.tv_nsec -= 1000000000;
             }
-            pthread_cond_timedwait(&ctl->cond, &ctl->lock, &ts);
+            int rc = pthread_cond_timedwait(&ctl->cond, &ctl->lock, &ts);
+
+            if (rc == ETIMEDOUT) {
+                // periodic wakeup -> re-check force_quit
+                continue;
+            }
         }
 
         if (ctl->command == CMD_EXIT) {
