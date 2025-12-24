@@ -308,8 +308,10 @@ static inline uint16_t build_tx_burst(struct rte_mbuf **tx_pkts,
         if (psc->global_cfg->pace_mode == VC_PACE_PCAP_TS) {
             uint64_t rel_ts = my_ts_get(tmpl, mbuf_ts_off);
             if (unlikely(rel_ts < vc->base_rel_ns)) {
-                break; // end VC for this epoch
+                vc->pcap_idx++;     // skip weird/backward timestamp packet
+                continue;
             }
+
             uint64_t rel = rel_ts - vc->base_rel_ns;  
             uint64_t pkt_phase = (vc->start_offset_ns + rel) % psc->global_cfg->replay_window_ns;
             if (pkt_phase > phase) 
