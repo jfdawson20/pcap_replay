@@ -307,15 +307,14 @@ static inline uint16_t build_tx_burst(struct rte_mbuf **tx_pkts,
         //if we are pacing based on pcap timestamps, check if this packet is due yet
         if (psc->global_cfg->pace_mode == VC_PACE_PCAP_TS) {
             uint64_t rel_ts = my_ts_get(tmpl, mbuf_ts_off);
-            if (unlikely(rel_ts < vc->base_rel_ns)) {
-                vc->pcap_idx++;     // skip weird/backward timestamp packet
-                continue;
-            }
+            if (rel_ts < vc->base_rel_ns) { vc->pcap_idx++; continue; }
 
-            uint64_t rel = rel_ts - vc->base_rel_ns;  
-            uint64_t pkt_phase = (vc->start_offset_ns + rel) % psc->global_cfg->replay_window_ns;
-            if (pkt_phase > phase) 
-                break; // not time yet
+            uint64_t due = vc->start_offset_ns + (rel_ts - vc->base_rel_ns);
+            if (due > psc->global_cfg->replay_window_ns) {
+                /* This packet would land beyond the window; end this VC for this epoch */
+                break;
+            }
+            if (due > phase) break;
 
         }
 

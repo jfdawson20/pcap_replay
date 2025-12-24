@@ -326,30 +326,29 @@ wpr_vc_init_start_params(wpr_vc_ctx_t *vc,
     if (gcfg->pace_mode == VC_PACE_PCAP_TS && gcfg->replay_window_ns > 0) {
         const uint64_t window = gcfg->replay_window_ns;
 
-        /*
-         * Choose a phase in [0,window). Evenly space by vc_local_idx
-         * and add small deterministic jitter so they don't align perfectly.
-         */
         uint64_t phase = (vc_count ? (window * (uint64_t)vc_local_idx) / (uint64_t)vc_count : 0);
-
-        uint64_t jitter_max = window / 100;            /* 1% */
+        uint64_t jitter_max = window / 100;
         uint64_t jitter = (jitter_max ? (r % jitter_max) : 0);
-
         start_offset_ns = (phase + jitter) % window;
 
-        /*
-         * Choose start_idx as the first packet whose rel_ts >= start_offset_ns.
-         * This makes the "content" align with the chosen phase.
-         */
-        start_idx = lower_bound_rel_ns(slot, n, start_offset_ns, mbuf_ts_off);
+        /* start_idx comes from start_mode, NOT from start_offset_ns */
+        if (gcfg->start_mode == VC_START_RANDOM_INDEX) {
+            start_idx = (uint32_t)(r % n);
+        } else {
+            start_idx = base_idx;   /* usually 0 */
+        }
 
-        /*
-         * Optional: if you want VC_START_FIXED_INDEX to bias the chosen start,
-         * you can instead search forward from base_idx for the first rel_ts >= start_offset_ns.
-         * Keep it simple for now.
-         */
-        (void)base_idx;
-    } else {
+        uint64_t rel0 = wpr_slot_pkt_rel_ns(slot, start_idx, mbuf_ts_off);
+        if (rel0 == UINT64_MAX) rel0 = 0;
+
+        vc->start_idx = start_idx;
+        vc->pcap_idx = start_idx;
+        vc->start_offset_ns = start_offset_ns;
+        vc->base_rel_ns = rel0;
+        return;
+    }
+
+    else {
         /*
          * Unpaced: spread by packet index.
          * - RANDOM_INDEX: pseudo-random
