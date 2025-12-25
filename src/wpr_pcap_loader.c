@@ -564,35 +564,24 @@ static int process_pcap(wpr_thread_args_t *thread_args, const char *filename)
             ip_flowkey_valid = true;
 
         //tenant ID is overloaded to separate per mbuf slot rules, not used for actual multi-tenant so don't count. 
-        ip_flow_key.tenant_id = 0;
-        
         if (ip_flowkey_valid) {
-            int add_rc = rte_hash_add_key(connset, &ip_flow_key);
-            if (add_rc >= 0) {
-                /* rte_hash_add_key returns >=0 on success (insert or existing key);
-                 * unfortunately it doesn't distinguish insert vs already exists.
-                 * So use add_key_data with a dummy pointer and check EEXIST via add_key_with_hash?
-                 *
-                 * Easiest reliable method: lookup first, then add.
-                 */
-            }
-        }
+            // tenant ID is overloaded to separate per mbuf slot rules, not used for actual multi-tenant so don't count.
+            ip_flow_key.tenant_id = 0;
 
-        /* Reliable unique count: lookup then add if missing */
-        if (ip_flowkey_valid) {
+            /* Unique count: lookup then insert if missing */
             int look_rc = rte_hash_lookup(connset, &ip_flow_key);
             if (look_rc < 0) {
                 int ins_rc = rte_hash_add_key(connset, &ip_flow_key);
                 if (ins_rc >= 0) {
                     unique_conns++;
                 } else if (ins_rc != -EEXIST) {
-                    /* If the table fills, you can either stop counting or grow entries. */
                     WPR_LOG(WPR_LOG_DP, RTE_LOG_WARNING,
                             "connset insert failed rc=%d (unique_conns=%" PRIu64 ")\n",
                             ins_rc, unique_conns);
                 }
             }
         }
+
 
         if (!ip_flowkey_valid && !l2_flowkey_valid) {
             WPR_LOG(WPR_LOG_DP, RTE_LOG_INFO,
