@@ -281,28 +281,26 @@ def _fmt_ns(ns):
 
 def display_loaded_pcaps(reply: Dict[str, Any]) -> None:
     """
-    Render loaded pcaps list.
-
-    Expected (current):
-      {
-        "status": "success",
-        "num_pcaps": N,
-        "loaded_pcaps": [
-          {
-            "slotid": 0,
-            "pcap_name": "...",
-            "pcap_packets": 123,
-            "first_ns": ...,
-            "last_ns": ...,
-            "delta_ns": ...,
-            "size_in_bytes": ...,
-            "mode": 0
-          }
-        ]
-      }
+    Render loaded pcaps list with rate + autotune metadata.
 
     Backwards-compatible with older shapes.
     """
+
+    def _fmt_rate(v, unit):
+        if v in ("", None):
+            return ""
+        try:
+            return f"{float(v):,.2f} {unit}"
+        except Exception:
+            return str(v)
+
+    def _fmt_int(v):
+        if v in ("", None):
+            return ""
+        try:
+            return f"{int(v):,}"
+        except Exception:
+            return str(v)
 
     slots = (
         reply.get("loaded_pcaps")
@@ -318,42 +316,63 @@ def display_loaded_pcaps(reply: Dict[str, Any]) -> None:
     t.field_names = [
         "Slot",
         "PCAP",
-        "Packets",
+        "Pkts",
         "Size",
         "Δ Time",
-        "First TS",
-        "Last TS",
+        "Native PPS",
+        "Native BPS",
+        "Native CPS",
         "Mode",
+        "Last Tune",
+        "Tune Target",
+        "Chosen VC",
+        "Predicted",
     ]
 
     for s in slots:
         if not isinstance(s, dict):
-            t.add_row(["", str(s), "", "", "", "", "", ""])
+            t.add_row(["", str(s)] + [""] * (len(t.field_names) - 2))
             continue
 
+        # Core identity
         slotid   = s.get("slotid", s.get("slot_id", s.get("id", "")))
         name     = s.get("pcap_name", s.get("filename", s.get("file", "")))
         packets  = s.get("pcap_packets", s.get("packets", ""))
         size_b   = s.get("size_in_bytes", s.get("bytes", ""))
         delta_ns = s.get("delta_ns", "")
-        first_ns = s.get("first_ns", "")
-        last_ns  = s.get("last_ns", "")
         mode     = s.get("mode", "")
+
+        # Native rates
+        native_pps = s.get("native_pps", "")
+        native_bps = s.get("native_bps", "")
+        native_cps = s.get("native_cps", "")
+
+        # Autotune metadata
+        tune_kind   = s.get("last_autotune_kind", "")
+        tune_target = s.get("last_autotune_target", "")
+        tune_vc     = s.get("last_autotune_chosen_vc", "")
+        tune_pred   = s.get("last_autotune_predicted_total", "")
 
         t.add_row([
             slotid,
             name,
-            packets,
+            _fmt_int(packets),
             _fmt_bytes(size_b),
             _fmt_ns(delta_ns),
-            _fmt_ns(first_ns),
-            _fmt_ns(last_ns),
+            _fmt_rate(native_pps, "pps"),
+            _fmt_rate(native_bps, "bps"),
+            _fmt_rate(native_cps, "cps"),
             mode,
+            tune_kind,
+            _fmt_rate(tune_target, ""),
+            tune_vc,
+            _fmt_rate(tune_pred, ""),
         ])
 
     print("Loaded PCAPs:")
     print(t)
     print("")
+
 
 
 
