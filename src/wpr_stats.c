@@ -18,6 +18,7 @@ The main thread runs in a infinite loop at a poll frequency specified at launch 
 #include <stdio.h> 
 #include <unistd.h>
 
+
 #include "wpr_stats.h"
 #include "wpr_app_defines.h"
 #include "wpr_time.h"
@@ -51,78 +52,187 @@ static int update_memstats(wpr_thread_args_t *thread_args){
     return 0;
 }
 
-/* Collect port statistics and compute rates. Function gathers DPDK xstats and computes the rate for each statistic based on the poll frequency */
-static int update_portstats(wpr_thread_args_t *thread_args){
-    wpr_ports_t *global_port_list = thread_args->global_port_list;
+/* Drop-in replacement for update_portstats()
+ *
+ * Keeps your existing behavior:
+ *   - reads all xstats into current_port_stats[]
+ *   - computes per-xstat "instant" rates into rates_port_stats[] (value is uint64_t)
+ *   - updates prev_port_stats[]
+ *   - updates prev_ts
+ *
+ * Adds:
+ *   - computes EMA(10s) and EMA(30s) for ONLY:
+ *       rx_good_packets_rate, tx_good_packets_rate, rx_good_bytes_rate, tx_good_bytes_rate
+ *     (bytes EMA is converted to *bits/sec* EMA because you said bps means bits/sec)
+ *
+ * Assumptions:
+ *   - port_entry->stats.xstats.port_stats_names[] contains names aligned with current_port_stats[]
+ *   - rates are stored in rates_port_stats[] at the same index j
+ *   - thread_args->poll_period_ms is ~stable, but we compute dt from timestamps anyway
+ *
+ * Important fix:
+ *   - avoids `continue` while holding port_entry->stats.lock (deadlock bug)
+ */
 
-    for (unsigned int i =0; i < global_port_list->num_ports; i++){
-        if(!global_port_list->ports[i].name){
-            WPR_LOG(WPR_LOG_STATS, RTE_LOG_ERR, "Port name is NULL for port index %u\n", i);
-            continue;
-        }
+#include <math.h>   /* exp() for ema_alpha() if your helper uses it */
+
+static inline uint64_t diff_u64_wrap(uint64_t cur, uint64_t prev)
+{
+    if (cur >= prev) return cur - prev;
+    return (UINT64_MAX - prev) + cur + 1;
+}
+
+static int update_portstats(wpr_thread_args_t *thread_args)
+{
+    wpr_ports_t *global_port_list = thread_args->global_port_list;
+    if (!global_port_list) return -EINVAL;
+
+    for (unsigned int i = 0; i < global_port_list->num_ports; i++) {
 
         wpr_port_entry_t *port_entry = &global_port_list->ports[i];
-        if(!port_entry){
-            WPR_LOG(WPR_LOG_STATS, RTE_LOG_ERR, "Port entry is NULL for port index %u\n", i);
+        if (!port_entry || !port_entry->name) {
+            WPR_LOG(WPR_LOG_STATS, RTE_LOG_ERR,
+                    "Port entry/name is NULL for port index %u\n", i);
             continue;
         }
 
-        if(port_entry->kind == WPR_PORT_TYPE_DROP){
+        if (port_entry->kind == WPR_PORT_TYPE_DROP)
+            continue;
+
+        /* We only support ETHQ xstats in this function for now. */
+        if (port_entry->kind == WPR_PORT_TYPE_RING) {
+            /* If you later add ring stats, do it here without holding the lock across a continue. */
             continue;
         }
-        //lock mutex 
+
         pthread_mutex_lock(&port_entry->stats.lock);
-        //capture current time
+
+        /* Capture time and compute dt */
         clock_gettime(CLOCK_MONOTONIC, &port_entry->stats.curr_ts);
 
-        //calculate time delta 
-        double time_delta = timespec_diff_sec(&port_entry->stats.prev_ts,&port_entry->stats.curr_ts);  
+        double time_delta = timespec_diff_sec(&port_entry->stats.prev_ts,
+                                              &port_entry->stats.curr_ts);
 
-        //update stats for this port
-        if (port_entry->kind == WPR_PORT_TYPE_RING){
-            //not used in this app
+        /* If this is the very first sample, prev_ts may be zero; clamp dt. */
+        if (!(time_delta > 0.0)) time_delta = (double)thread_args->poll_period_ms / 1000.0;
+        if (!(time_delta > 0.0)) time_delta = 1e-3; /* last resort */
+
+        wpr_single_port_xstats_t *xs = &port_entry->stats.xstats;
+        if (!xs || xs->n_xstats <= 0 ||
+            !xs->current_port_stats || !xs->prev_port_stats || !xs->rates_port_stats ||
+            !xs->port_stats_names) {
+            pthread_mutex_unlock(&port_entry->stats.lock);
+            WPR_LOG(WPR_LOG_STATS, RTE_LOG_ERR,
+                    "Port %s has invalid xstats buffers\n", port_entry->name);
             continue;
         }
-        else{ 
-            //fetch port stats
-            int ret = rte_eth_xstats_get(port_entry->port_id,port_entry->stats.xstats.current_port_stats, port_entry->stats.xstats.n_xstats);
-            if (ret < 0 || ret > port_entry->stats.xstats.n_xstats){
-                //unlock 
-                pthread_mutex_unlock(&port_entry->stats.lock);
-                return -1;
-            }
 
-            //compute rates 
-            for (int j=0; j<port_entry->stats.xstats.n_xstats; j++){
-                uint64_t diff_value = 0;
-                //handle cases where counters have wrapped, calculate diff
-                if(port_entry->stats.xstats.current_port_stats[j].value >= port_entry->stats.xstats.prev_port_stats[j].value){
-                    diff_value = port_entry->stats.xstats.current_port_stats[j].value - port_entry->stats.xstats.prev_port_stats[j].value;
-                } else {
-                    diff_value = (UINT64_MAX - port_entry->stats.xstats.prev_port_stats[j].value) + port_entry->stats.xstats.current_port_stats[j].value + 1;
-                }
-
-                double rate = (double)diff_value / time_delta; 
-                
-                //update rate array
-               port_entry->stats.xstats.rates_port_stats[j].id = port_entry->stats.xstats.current_port_stats[j].id;
-               port_entry->stats.xstats.rates_port_stats[j].value = (uint64_t)rate;
-
-               //update the prev value array
-               port_entry->stats.xstats.prev_port_stats[j].value = port_entry->stats.xstats.current_port_stats[j].value;
-
-            }            
+        /* Fetch xstats */
+        int ret = rte_eth_xstats_get(port_entry->port_id,
+                                     xs->current_port_stats,
+                                     xs->n_xstats);
+        if (ret < 0 || ret > xs->n_xstats) {
+            pthread_mutex_unlock(&port_entry->stats.lock);
+            WPR_LOG(WPR_LOG_STATS, RTE_LOG_ERR,
+                    "rte_eth_xstats_get failed for port %s (id=%u) ret=%d\n",
+                    port_entry->name, port_entry->port_id, ret);
+            return -1;
         }
 
-        //update prev ts 
+        /* Track indices for the four stats we care about */
+        int idx_rx_good_pkts  = -1;
+        int idx_tx_good_pkts  = -1;
+        int idx_rx_good_bytes = -1;
+        int idx_tx_good_bytes = -1;
+
+        /* Compute per-xstat instantaneous rates, update prev values */
+        for (int j = 0; j < xs->n_xstats; j++) {
+            uint64_t curv  = xs->current_port_stats[j].value;
+            uint64_t prevv = xs->prev_port_stats[j].value;
+
+            uint64_t diff = diff_u64_wrap(curv, prevv);
+
+            double rate_d = (double)diff / time_delta;
+            if (rate_d < 0.0) rate_d = 0.0;
+
+            xs->rates_port_stats[j].id    = xs->current_port_stats[j].id;
+            xs->rates_port_stats[j].value = (uint64_t)rate_d;
+
+            xs->prev_port_stats[j].value = curv;
+
+            /* Identify the four stat indices by name */
+            const char *nm = xs->port_stats_names[j].name;
+            if (nm) {
+                if (idx_rx_good_pkts < 0 && strcmp(nm, "rx_good_packets") == 0) {
+                    idx_rx_good_pkts = j;
+                } else if (idx_tx_good_pkts < 0 && strcmp(nm, "tx_good_packets") == 0) {
+                    idx_tx_good_pkts = j;
+                } else if (idx_rx_good_bytes < 0 && strcmp(nm, "rx_good_bytes") == 0) {
+                    idx_rx_good_bytes = j;
+                } else if (idx_tx_good_bytes < 0 && strcmp(nm, "tx_good_bytes") == 0) {
+                    idx_tx_good_bytes = j;
+                }
+            }
+        }
+
+        /* Update EMA smoothing (pps and bps(bits/sec)) for those four */
+        if (xs->rate_ema) {
+            wpr_rate_ema_t *ema = xs->rate_ema;
+
+            /* derive instant rates from diffs we just computed:
+             * - pps: packets/sec
+             * - bps: bits/sec (bytes/sec * 8)
+             */
+            double inst_rx_pps = 0.0, inst_tx_pps = 0.0;
+            double inst_rx_bps = 0.0, inst_tx_bps = 0.0;
+
+            if (idx_rx_good_pkts >= 0) {
+                inst_rx_pps = (double)xs->rates_port_stats[idx_rx_good_pkts].value;
+            }
+            if (idx_tx_good_pkts >= 0) {
+                inst_tx_pps = (double)xs->rates_port_stats[idx_tx_good_pkts].value;
+            }
+            if (idx_rx_good_bytes >= 0) {
+                inst_rx_bps = (double)xs->rates_port_stats[idx_rx_good_bytes].value * 8.0;
+            }
+            if (idx_tx_good_bytes >= 0) {
+                inst_tx_bps = (double)xs->rates_port_stats[idx_tx_good_bytes].value * 8.0;
+            }
+
+            /* EMA alphas (supports variable dt) */
+            const double a10 = ema_alpha(time_delta, 10.0);
+            const double a30 = ema_alpha(time_delta, 30.0);
+
+            if (!ema->init) {
+                ema->rx_pps_ema10 = ema->rx_pps_ema30 = inst_rx_pps;
+                ema->tx_pps_ema10 = ema->tx_pps_ema30 = inst_tx_pps;
+                ema->rx_bps_ema10 = ema->rx_bps_ema30 = inst_rx_bps;
+                ema->tx_bps_ema10 = ema->tx_bps_ema30 = inst_tx_bps;
+                ema->init = true;
+            } else {
+                ema->rx_pps_ema10 = ema_update(ema->rx_pps_ema10, inst_rx_pps, a10);
+                ema->rx_pps_ema30 = ema_update(ema->rx_pps_ema30, inst_rx_pps, a30);
+
+                ema->tx_pps_ema10 = ema_update(ema->tx_pps_ema10, inst_tx_pps, a10);
+                ema->tx_pps_ema30 = ema_update(ema->tx_pps_ema30, inst_tx_pps, a30);
+
+                ema->rx_bps_ema10 = ema_update(ema->rx_bps_ema10, inst_rx_bps, a10);
+                ema->rx_bps_ema30 = ema_update(ema->rx_bps_ema30, inst_rx_bps, a30);
+
+                ema->tx_bps_ema10 = ema_update(ema->tx_bps_ema10, inst_tx_bps, a10);
+                ema->tx_bps_ema30 = ema_update(ema->tx_bps_ema30, inst_tx_bps, a30);
+            }
+        }
+
+        /* Update prev timestamp */
         port_entry->stats.prev_ts = port_entry->stats.curr_ts;
 
-        //unlock mutex
         pthread_mutex_unlock(&port_entry->stats.lock);
     }
-    
+
     return 0;
 }
+
 
 static int wpr_update_worker_stats(wpr_thread_args_t *thread_args){
     wpr_stats_all_t *stats_memory = thread_args->global_stats;

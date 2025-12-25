@@ -65,6 +65,15 @@ typedef struct wpr_ring_port{
     wpr_ring_stats_shard_t *stats_shard; //per worker core stats pointer    
 } wpr_ring_port_t;
 
+//smoothing struct for rate ema calculations
+typedef struct wpr_rate_ema {
+    double rx_pps_ema10, rx_pps_ema30;
+    double tx_pps_ema10, tx_pps_ema30;
+    double rx_bps_ema10, rx_bps_ema30;
+    double tx_bps_ema10, tx_bps_ema30;
+    bool   init;
+} wpr_rate_ema_t;
+
 //stats struct for holding physical port xstats 
 typedef struct wpr_single_port_xstats {
     int n_xstats;
@@ -74,6 +83,7 @@ typedef struct wpr_single_port_xstats {
     struct rte_eth_xstat        *prev_port_stats;
     struct rte_eth_xstat        *current_port_stats; 
     struct rte_eth_xstat        *rates_port_stats;     
+    wpr_rate_ema_t              *rate_ema;
 } wpr_single_port_xstats_t;
 
 //stats struct for holding ring based port stats

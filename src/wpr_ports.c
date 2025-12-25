@@ -817,6 +817,15 @@ int wpr_port_stats_init(wpr_port_entry_t *port_entry){
             return -ENOMEM;
         }
 
+        //initialize ema rate stats data
+        port_entry->stats.xstats.rate_ema = rte_zmalloc("ema_rates_port_xstats",
+                                                                sizeof(wpr_rate_ema_t),
+                                                                RTE_CACHE_LINE_SIZE);
+        if (port_entry->stats.xstats.rate_ema == NULL) {
+            return -ENOMEM;
+        }
+
+
         //preload xstat names array so we don't have to do it later
         int ret = rte_eth_xstats_get_names(port_entry->port_id, port_entry->stats.xstats.port_stats_names, n_xstats);
         if (ret < 0 || ret > n_xstats){

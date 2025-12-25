@@ -23,6 +23,6 @@ srcs = files(
 executable(
   'pcap_replay_dataplane',
   srcs,
-  dependencies: [dpdk,jansson,pthread,pcap, cyaml],
+  dependencies: [dpdk,jansson,pthread,pcap, cyaml, libm],
   include_directories: include_directories('../include'))
 

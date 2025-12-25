@@ -21,6 +21,7 @@ Where there isn't a great landing spot for a stats struct, we place it in the gl
 #include <stdatomic.h> 
 #include <pthread.h>
 #include <time.h> 
+#include <math.h> 
 
 #include <rte_common.h>
 
@@ -72,5 +73,17 @@ typedef struct wpr_stats_all{
 
 
 void *run_wpr_stats_thread(void *arg);
+
+
+static inline double ema_alpha(double dt, double tau)
+{
+    // alpha = 1 - exp(-dt/tau)
+    return 1.0 - exp(-dt / tau);
+}
+
+static inline double ema_update(double ema, double sample, double alpha)
+{
+    return ema + alpha * (sample - ema);
+}
 
 #endif /* WPR_STATS_H */

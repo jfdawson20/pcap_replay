@@ -123,6 +123,16 @@ int wpr_cmd_port_stats(json_t *reply_root, json_t *args, wpr_thread_args_t *thre
 
                 rc += json_object_set_new(portstats,name,json_integer(ps->xstats.rates_port_stats[j].value));
             }
+
+            //add smoothed ema rates
+            rc += json_object_set_new(portstats,"rx_pps_ema10",json_real(ps->xstats.rate_ema->rx_pps_ema10));
+            rc += json_object_set_new(portstats,"rx_pps_ema30",json_real(ps->xstats.rate_ema->rx_pps_ema30));
+            rc += json_object_set_new(portstats,"tx_pps_ema10",json_real(ps->xstats.rate_ema->tx_pps_ema10));
+            rc += json_object_set_new(portstats,"tx_pps_ema30",json_real(ps->xstats.rate_ema->tx_pps_ema30));
+            rc += json_object_set_new(portstats,"rx_bps_ema10",json_real(ps->xstats.rate_ema->rx_bps_ema10));
+            rc += json_object_set_new(portstats,"rx_bps_ema30",json_real(ps->xstats.rate_ema->rx_bps_ema30));
+            rc += json_object_set_new(portstats,"tx_bps_ema10",json_real(ps->xstats.rate_ema->tx_bps_ema10));
+            rc += json_object_set_new(portstats,"tx_bps_ema30",json_real(ps->xstats.rate_ema->tx_bps_ema30));
         }
 
 
