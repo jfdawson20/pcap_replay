@@ -229,8 +229,10 @@ static int wpr_pcap_pick_vc_for_target(pcap_mbuff_slot_t *slot,
                                       uint32_t *chosen_vc_out,
                                       double *predicted_total_out)
 {
-    if (!slot || !chosen_vc_out || target <= 0.0)
+    if (!slot || !chosen_vc_out || target <= 0.0){
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: invalid arguments to wpr_pcap_pick_vc_for_target\n");
         return -EINVAL;
+    }
 
     const double margin = (slot->scaling.safety_margin > 0.0 &&
                            slot->scaling.safety_margin <= 1.0)
@@ -242,18 +244,24 @@ static int wpr_pcap_pick_vc_for_target(pcap_mbuff_slot_t *slot,
     case WPR_TARGET_PPS: base = slot->scaling.base_pps_per_vc; break;
     case WPR_TARGET_BPS: base = slot->scaling.base_bps_per_vc; break;
     case WPR_TARGET_CPS: base = slot->scaling.base_cps_per_vc; break;
-    default: return -EINVAL;
+    default: 
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: invalid target kind in wpr_pcap_pick_vc_for_target\n");
+        return -EINVAL;
     }
 
     if (base <= 0.0) {
         /* template has 0 duration or 0 packets or couldn't compute */
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: invalid base rate in wpr_pcap_pick_vc_for_target\n");
         return -ERANGE;
     }
 
     /* We want predicted_total = base * vc >= target*margin (or <= target depending on policy).
        For a "starting point" that reaches target, use ceil(target/(base*margin)). */
     double denom = base * margin;
-    if (denom <= 0.0) return -ERANGE;
+    if (denom <= 0.0) {
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: invalid denominator in wpr_pcap_pick_vc_for_target\n");
+        return -ERANGE;
+    }
 
     uint32_t vc = (uint32_t)ceil(target / denom);
 
