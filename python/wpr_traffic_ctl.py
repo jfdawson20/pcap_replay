@@ -35,6 +35,8 @@ CMD_GET_PORT_LIST = "wpr_cmd_get_port_list"
 CMD_PORT_TX_CTL = "wpr_port_tx_ctl"
 
 CMD_SET_PORT_STREAM_VCS = "wpr_set_port_stream_vcs"
+CMD_SET_TARGET_RATE = "wpr_set_target_rate"
+
 
 
 
@@ -150,6 +152,18 @@ class PprTrafficClient:
             "num_vcs": int(num_vcs),
         }
         return self.ctl.call(CMD_SET_PORT_STREAM_VCS, args=payload)
+
+    def set_target_rate(self, port: str, target_kind: str, target_value: float) -> Dict[str, Any]:
+        kind = (target_kind or "").strip().lower()
+        if kind not in ("bps", "pps"):  # extend later if you add cps
+            raise ValueError("target_kind must be 'bps' or 'pps'")
+        payload = {
+            "port": port,
+            "target_kind": kind,
+            "target_value": float(target_value),
+        }
+        return self.ctl.call(CMD_SET_TARGET_RATE, args=payload)
+
 
 
 # ---------------------------------------------------------------------------
@@ -446,6 +460,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_vcs.add_argument("--portname", required=True, help="Port name")
     p_vcs.add_argument("--num-vcs", required=True, type=int, help="Number of active VCs (clients)")
 
+    # ---- target rate ----
+    p_rate = sp.add_parser("rate", help="Set target rate for a port stream (bps or pps)")
+    p_rate.add_argument("--portname", required=True, help="Port name")
+    p_rate.add_argument(
+        "--kind",
+        required=True,
+        choices=["bps", "pps"],
+        help="Target kind",
+    )
+    p_rate.add_argument(
+        "--value",
+        required=True,
+        type=float,
+        help="Target value (float)",
+    )
+
 
     return p
 
@@ -500,6 +530,11 @@ def main() -> int:
         if args.command == "vcs":
             reply = traffic.set_port_stream_vcs(args.portname, args.num_vcs)
             display_generic_reply("Set Port Stream VCs Reply", reply)
+            return 0
+            
+        if args.command == "rate":
+            reply = traffic.set_target_rate(args.portname, args.kind, args.value)
+            display_generic_reply("Set Target Rate Reply", reply)
             return 0
 
 
