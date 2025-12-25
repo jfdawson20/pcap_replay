@@ -50,6 +50,7 @@ Description:
 #include "wpr_acl.h"
 #include "wpr_flowkey.h"
 #include "wpr_header_extract.h"
+#include "wpr_tx_worker.h"
 
 
 /* ------------------------------- dynamic mbuf array functions -------------------------- */
@@ -355,7 +356,7 @@ static inline void process_acl_lookup(wpr_acl_runtime_t *acl_runtime_ctx,
 * @param unique_conns
 *   Number of unique connections in the pcap.
 **/
-static void wpr_pcap_fill_native_metrics(pcap_mbuff_slot_t *slot, uint64_t unique_conns)
+static void wpr_pcap_fill_metrics(pcap_mbuff_slot_t *slot, uint64_t unique_conns, unsigned int max_vc_supported)
 {
     if (!slot) return;
 
@@ -372,6 +373,13 @@ static void wpr_pcap_fill_native_metrics(pcap_mbuff_slot_t *slot, uint64_t uniqu
     slot->native_metrics.pps = (double)slot->numpackets / dur_s;
     slot->native_metrics.bps = ((double)slot->size_in_bytes * 8.0) / dur_s;
     slot->native_metrics.cps = (double)unique_conns / dur_s;
+
+    slot->scaling.base_pps_per_vc = slot->native_metrics.pps;
+    slot->scaling.base_bps_per_vc = slot->native_metrics.bps;
+    slot->scaling.base_cps_per_vc = (unique_conns > 0) ? slot->native_metrics.cps : 0.0;
+
+    slot->scaling.max_vc_supported = max_vc_supported;
+    slot->scaling.safety_margin = 0.9; /* default 90% margin */
 }
 
 /*
@@ -626,10 +634,10 @@ static int process_pcap(wpr_thread_args_t *thread_args, const char *filename)
     slot->mode          = UNASSIGNED;
 
     /* Fill native metrics (pps/bps/cps) */
-    wpr_pcap_fill_native_metrics(slot, unique_conns);
 
+    wpr_pcap_fill_metrics(slot, unique_conns, MAX_VC_PER_WORKER*thread_args->num_tx_cores);
     /* Publish the slot pointer atomically.
-     * After this point, do not mutate slot or mbuff_array fields.
+     * After this point, do not mutate slot or mbuf_array fields.
      */
     pcap_storage_publish_slot(st, slotid, slot);
 
